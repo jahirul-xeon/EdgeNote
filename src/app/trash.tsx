@@ -15,6 +15,7 @@ import {
 } from '@/database/notesRepository';
 import { useTheme } from '@/hooks/use-theme';
 import { deriveTitle, derivePreview, relativeTime } from '@/utils/format';
+import { hapticLight, hapticWarning } from '@/utils/haptics';
 import type { Note } from '@/types/note';
 
 export default function TrashScreen() {
@@ -56,13 +57,26 @@ export default function TrashScreen() {
   const handleEmpty = () => {
     Alert.alert('Empty Recently Deleted?', 'This permanently deletes all notes here.', [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Delete All', style: 'destructive', onPress: () => emptyTrash() },
+      {
+        text: 'Delete All',
+        style: 'destructive',
+        onPress: () => {
+          hapticWarning();
+          void emptyTrash();
+        },
+      },
     ]);
   };
 
   const handleLongPress = (note: Note) => {
     Alert.alert(deriveTitle(note.content) || 'New Note', undefined, [
-      { text: 'Restore', onPress: () => restoreNote(note.id) },
+      {
+        text: 'Restore',
+        onPress: () => {
+          hapticLight();
+          void restoreNote(note.id);
+        },
+      },
       {
         text: 'Delete Permanently',
         style: 'destructive',

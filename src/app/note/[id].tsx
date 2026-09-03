@@ -21,6 +21,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassSurface } from '@/components/glass/glass-surface';
 import { Icon } from '@/components/icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -46,6 +47,7 @@ import type { BlockType, ContentBlock } from '@/types/blocks';
 import { isTextBlock } from '@/types/blocks';
 import { blocksToPlainText, createBlock, parseBlocks } from '@/utils/blocks';
 import { deriveTitle } from '@/utils/format';
+import { hapticLight, hapticSelection, hapticWarning } from '@/utils/haptics';
 
 const AUTOSAVE_DELAY = 400;
 
@@ -149,6 +151,7 @@ export default function NoteEditorScreen() {
   };
 
   const toggleCheck = (blockId: string) => {
+    hapticSelection();
     mutate(
       blocksRef.current.map((b) =>
         b.id === blockId && b.type === 'checklist' ? { ...b, checked: !b.checked } : b,
@@ -263,6 +266,7 @@ export default function NoteEditorScreen() {
         text: pinnedRef.current ? 'Unpin' : 'Pin',
         onPress: () => {
           pinnedRef.current = !pinnedRef.current;
+          hapticLight();
           void setPinned(id, pinnedRef.current);
         },
       },
@@ -279,6 +283,7 @@ export default function NoteEditorScreen() {
         onPress: () => {
           if (saveTimer.current) clearTimeout(saveTimer.current);
           initialized.current = false;
+          hapticWarning();
           void deleteNote(id);
           router.back();
         },
@@ -341,18 +346,14 @@ export default function NoteEditorScreen() {
           ))}
         </ScrollView>
 
-        <View
-          style={[
-            styles.toolbar,
-            { borderColor: theme.separator, backgroundColor: theme.backgroundElement },
-          ]}>
+        <GlassSurface style={styles.toolbar}>
           <ToolbarButton icon="checkbox" label="Checklist" onPress={() => addTextBlock('checklist')} theme={theme} />
           <ToolbarButton icon="heading" label="Heading" onPress={() => addTextBlock('heading')} theme={theme} />
           <ToolbarButton icon="bullet-list" label="List" onPress={() => addTextBlock('bullet')} theme={theme} />
           <ToolbarButton icon="image" label="Photo" onPress={() => addAttachment('library')} theme={theme} />
           <ToolbarButton icon="camera" label="Camera" onPress={() => addAttachment('camera')} theme={theme} />
           <ToolbarButton icon="attach" label="File" onPress={() => addAttachment('file')} theme={theme} />
-        </View>
+        </GlassSurface>
         <View style={{ height: insets.bottom }} />
       </KeyboardAvoidingView>
     </ThemedView>
@@ -534,7 +535,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingVertical: Spacing.two,
     paddingHorizontal: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  toolbarBtn: { padding: Spacing.two },
+  toolbarBtn: { padding: Spacing.three, minWidth: 44, alignItems: 'center' },
 });

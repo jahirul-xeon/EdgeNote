@@ -2,6 +2,7 @@ import { useRouter } from 'expo-router';
 import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { GlassSurface } from '@/components/glass/glass-surface';
 import { Icon } from '@/components/icon';
 import { ListRow } from '@/components/list-row';
 import { OfflineBanner } from '@/components/offline-banner';
@@ -15,6 +16,7 @@ import { ALL_NOTES_FOLDER, createNote } from '@/database/notesRepository';
 import { useFolders } from '@/hooks/use-folders';
 import { useTheme } from '@/hooks/use-theme';
 import type { FolderWithCount } from '@/types/folder';
+import { hapticLight, hapticWarning } from '@/utils/haptics';
 
 export default function FoldersHomeScreen() {
   const theme = useTheme();
@@ -23,6 +25,7 @@ export default function FoldersHomeScreen() {
   const { folders, allNotesCount, trashCount } = useFolders();
 
   const handleNewNote = async () => {
+    hapticLight();
     const note = await createNote();
     router.push({ pathname: '/note/[id]', params: { id: note.id } });
   };
@@ -39,7 +42,14 @@ export default function FoldersHomeScreen() {
         onPress: () =>
           Alert.alert(`Delete "${folder.name}"?`, 'Notes in this folder will be moved to All Notes.', [
             { text: 'Cancel', style: 'cancel' },
-            { text: 'Delete Folder', style: 'destructive', onPress: () => deleteFolder(folder.id) },
+            {
+              text: 'Delete Folder',
+              style: 'destructive',
+              onPress: () => {
+                hapticWarning();
+                void deleteFolder(folder.id);
+              },
+            },
           ]),
       },
       { text: 'Cancel', style: 'cancel' },
@@ -115,15 +125,7 @@ export default function FoldersHomeScreen() {
         </View>
       </ScrollView>
 
-      <View
-        style={[
-          styles.toolbar,
-          {
-            paddingBottom: insets.bottom + Spacing.two,
-            borderColor: theme.separator,
-            backgroundColor: theme.background,
-          },
-        ]}>
+      <GlassSurface style={[styles.toolbar, { paddingBottom: insets.bottom + Spacing.two }]}>
         <Pressable
           onPress={() => router.push({ pathname: '/folder-edit' })}
           accessibilityRole="button"
@@ -144,7 +146,7 @@ export default function FoldersHomeScreen() {
           <Icon name="compose" size={20} color={theme.accent} />
           <ThemedText style={[styles.compose, { color: theme.accent }]}>New Note</ThemedText>
         </Pressable>
-      </View>
+      </GlassSurface>
     </ThemedView>
   );
 }
@@ -180,8 +182,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.two,
-    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  toolbarBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  toolbarBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two, minHeight: 44 },
   compose: { fontWeight: '600' },
 });

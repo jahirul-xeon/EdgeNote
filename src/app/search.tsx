@@ -1,6 +1,7 @@
+import { FlashList } from '@shopify/flash-list';
 import { useRouter } from 'expo-router';
 import { useRef } from 'react';
-import { FlatList, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { Pressable, StyleSheet, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { Icon } from '@/components/icon';
@@ -83,7 +84,7 @@ export default function SearchScreen() {
         </Pressable>
       </View>
 
-      <FlatList
+      <FlashList
         data={results}
         keyExtractor={(item) => item.id}
         keyboardShouldPersistTaps="handled"

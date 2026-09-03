@@ -9,7 +9,9 @@ import { Spacing } from '@/constants/theme';
 import { resetDatabase } from '@/database/database';
 import { useSyncStatus } from '@/hooks/use-sync-status';
 import { useTheme } from '@/hooks/use-theme';
+import { useAppearance, type AppearancePreference } from '@/store/appearance';
 import { useAuth } from '@/store/auth';
+import { hapticSelection } from '@/utils/haptics';
 import { relativeTime } from '@/utils/format';
 
 const PHASE_LABEL: Record<string, string> = {
@@ -31,6 +33,7 @@ function Row({
   onPress,
   destructive,
   accent,
+  selected,
 }: {
   icon?: IconName;
   label: string;
@@ -38,6 +41,7 @@ function Row({
   onPress?: () => void;
   destructive?: boolean;
   accent?: boolean;
+  selected?: boolean;
 }) {
   const theme = useTheme();
   const color = destructive ? theme.danger : accent ? theme.accent : theme.text;
@@ -46,6 +50,8 @@ function Row({
       onPress={onPress}
       disabled={!onPress}
       android_ripple={{ color: theme.backgroundSelected }}
+      accessibilityRole={selected !== undefined ? 'radio' : 'button'}
+      accessibilityState={selected !== undefined ? { selected } : undefined}
       style={({ pressed }) => [styles.row, pressed && onPress ? { backgroundColor: theme.backgroundSelected } : null]}>
       {icon ? <Icon name={icon} size={20} color={color} /> : null}
       <ThemedText type="default" style={[styles.rowLabel, { color }]}>
@@ -56,6 +62,7 @@ function Row({
           {value}
         </ThemedText>
       ) : null}
+      {selected ? <Icon name="check" size={20} color={theme.accent} /> : null}
     </Pressable>
   );
 }
@@ -69,8 +76,20 @@ export default function SettingsScreen() {
   const theme = useTheme();
   const router = useRouter();
   const { user, isConfigured, signOut, syncNow } = useAuth();
+  const { preference, setPreference } = useAppearance();
   const sync = useSyncStatus();
   const version = Constants.expoConfig?.version ?? '1.0.0';
+
+  const appearanceOptions: { key: AppearancePreference; label: string }[] = [
+    { key: 'system', label: 'System' },
+    { key: 'light', label: 'Light' },
+    { key: 'dark', label: 'Dark' },
+  ];
+
+  const chooseAppearance = (next: AppearancePreference) => {
+    hapticSelection();
+    setPreference(next);
+  };
 
   const handleSignOut = () => {
     Alert.alert('Sign Out?', 'Your notes stay on this device.', [
@@ -139,6 +158,22 @@ export default function SettingsScreen() {
             </Group>
           </>
         )}
+
+        <ThemedText type="smallBold" themeColor="textSecondary" style={styles.header}>
+          APPEARANCE
+        </ThemedText>
+        <Group>
+          {appearanceOptions.map((option, index) => (
+            <View key={option.key}>
+              {index > 0 && <Divider />}
+              <Row
+                label={option.label}
+                selected={preference === option.key}
+                onPress={() => chooseAppearance(option.key)}
+              />
+            </View>
+          ))}
+        </Group>
 
         <ThemedText type="smallBold" themeColor="textSecondary" style={styles.header}>
           STORAGE

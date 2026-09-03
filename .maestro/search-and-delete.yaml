@@ -1,0 +1,14 @@
+# Search for a note, then delete it via the long-press action sheet.
+# Run: maestro test --env APP_ID=<your.bundle.id> .maestro/search-and-delete.yaml
+appId: ${APP_ID}
+---
+- launchApp
+- tapOn:
+    accessibilityLabel: 'Search notes'
+- inputText: 'Maestro'
+- assertVisible: 'Maestro test note'
+- tapOn: 'Maestro test note'
+- assertVisible: 'Maestro test note'
+- tapOn:
+    accessibilityLabel: 'Note actions'
+- tapOn: 'Delete'

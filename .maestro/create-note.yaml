@@ -1,0 +1,11 @@
+# Create a note and confirm it persists in the list (§62 critical path).
+# Run: maestro test --env APP_ID=<your.bundle.id> .maestro/create-note.yaml
+appId: ${APP_ID}
+---
+- launchApp
+- tapOn: 'All Notes'
+- tapOn:
+    accessibilityLabel: 'New note'
+- inputText: 'Maestro test note'
+- back
+- assertVisible: 'Maestro test note'
