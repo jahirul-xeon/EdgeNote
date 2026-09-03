@@ -1,0 +1,89 @@
+import { memo } from 'react';
+import { Pressable, StyleSheet, View } from 'react-native';
+
+import { Icon } from '@/components/icon';
+import { ThemedText } from '@/components/themed-text';
+import { Spacing } from '@/constants/theme';
+import { useTheme } from '@/hooks/use-theme';
+import type { Note } from '@/types/note';
+import { derivePreview, deriveTitle, relativeTime } from '@/utils/format';
+
+type NoteRowProps = {
+  note: Note;
+  onPress: (note: Note) => void;
+  onLongPress?: (note: Note) => void;
+};
+
+function NoteRowComponent({ note, onPress, onLongPress }: NoteRowProps) {
+  const theme = useTheme();
+  const title = deriveTitle(note.content) || 'New Note';
+  const preview = derivePreview(note.content);
+  const hasTitle = deriveTitle(note.content).length > 0;
+
+  return (
+    <Pressable
+      onPress={() => onPress(note)}
+      onLongPress={onLongPress ? () => onLongPress(note) : undefined}
+      android_ripple={{ color: theme.backgroundSelected }}
+      accessibilityRole="button"
+      accessibilityLabel={`Note: ${title}`}
+      style={({ pressed }) => [
+        styles.row,
+        { backgroundColor: pressed ? theme.backgroundSelected : theme.background },
+      ]}>
+      <View style={styles.titleLine}>
+        {note.isPinned && (
+          <View style={styles.pin}>
+            <Icon name="pin" size={13} color={theme.textSecondary} fill={theme.textSecondary} />
+          </View>
+        )}
+        <ThemedText
+          type="default"
+          numberOfLines={1}
+          style={[styles.title, !hasTitle && { color: theme.textSecondary }]}>
+          {title}
+        </ThemedText>
+      </View>
+      <View style={styles.metaLine}>
+        <ThemedText type="small" themeColor="textSecondary" style={styles.time}>
+          {relativeTime(note.updatedAt)}
+        </ThemedText>
+        <ThemedText type="small" themeColor="textSecondary" numberOfLines={1} style={styles.preview}>
+          {preview.length > 0 ? preview : 'No additional text'}
+        </ThemedText>
+      </View>
+    </Pressable>
+  );
+}
+
+export const NoteRow = memo(NoteRowComponent);
+
+const styles = StyleSheet.create({
+  row: {
+    paddingVertical: Spacing.three,
+    paddingHorizontal: Spacing.four,
+    gap: Spacing.one,
+  },
+  titleLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  pin: {
+    marginRight: Spacing.one,
+  },
+  title: {
+    flex: 1,
+    fontWeight: '600',
+  },
+  metaLine: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+  },
+  time: {
+    flexShrink: 0,
+  },
+  preview: {
+    flex: 1,
+  },
+});

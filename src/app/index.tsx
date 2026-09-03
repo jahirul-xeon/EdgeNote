@@ -1,98 +1,187 @@
-import * as Device from 'expo-device';
-import { Platform, StyleSheet } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useRouter } from 'expo-router';
+import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { AnimatedIcon } from '@/components/animated-icon';
-import { HintRow } from '@/components/hint-row';
+import { Icon } from '@/components/icon';
+import { ListRow } from '@/components/list-row';
+import { OfflineBanner } from '@/components/offline-banner';
+import { SearchField } from '@/components/search-field';
+import { SyncStatusLine } from '@/components/sync-status-line';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
-import { WebBadge } from '@/components/web-badge';
-import { BottomTabInset, MaxContentWidth, Spacing } from '@/constants/theme';
+import { Spacing } from '@/constants/theme';
+import { deleteFolder } from '@/database/foldersRepository';
+import { ALL_NOTES_FOLDER, createNote } from '@/database/notesRepository';
+import { useFolders } from '@/hooks/use-folders';
+import { useTheme } from '@/hooks/use-theme';
+import type { FolderWithCount } from '@/types/folder';
 
-function getDevMenuHint() {
-  if (Platform.OS === 'web') {
-    return <ThemedText type="small">use browser devtools</ThemedText>;
-  }
-  if (Device.isDevice) {
-    return (
-      <ThemedText type="small">
-        shake device or press <ThemedText type="code">m</ThemedText> in terminal
-      </ThemedText>
-    );
-  }
-  const shortcut = Platform.OS === 'android' ? 'cmd+m (or ctrl+m)' : 'cmd+d';
-  return (
-    <ThemedText type="small">
-      press <ThemedText type="code">{shortcut}</ThemedText>
-    </ThemedText>
-  );
-}
+export default function FoldersHomeScreen() {
+  const theme = useTheme();
+  const router = useRouter();
+  const insets = useSafeAreaInsets();
+  const { folders, allNotesCount, trashCount } = useFolders();
 
-export default function HomeScreen() {
+  const handleNewNote = async () => {
+    const note = await createNote();
+    router.push({ pathname: '/note/[id]', params: { id: note.id } });
+  };
+
+  const handleFolderLongPress = (folder: FolderWithCount) => {
+    Alert.alert(folder.name, undefined, [
+      {
+        text: 'Rename',
+        onPress: () => router.push({ pathname: '/folder-edit', params: { id: folder.id } }),
+      },
+      {
+        text: 'Delete',
+        style: 'destructive',
+        onPress: () =>
+          Alert.alert(`Delete "${folder.name}"?`, 'Notes in this folder will be moved to All Notes.', [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Delete Folder', style: 'destructive', onPress: () => deleteFolder(folder.id) },
+          ]),
+      },
+      { text: 'Cancel', style: 'cancel' },
+    ]);
+  };
+
   return (
     <ThemedView style={styles.container}>
-      <SafeAreaView style={styles.safeArea}>
-        <ThemedView style={styles.heroSection}>
-          <AnimatedIcon />
-          <ThemedText type="title" style={styles.title}>
-            Welcome to&nbsp;Expo
+      <OfflineBanner />
+      <ScrollView
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: insets.top + Spacing.two, paddingBottom: insets.bottom + 88 },
+        ]}>
+        <View style={styles.titleRow}>
+          <ThemedText type="title">Folders</ThemedText>
+          <Pressable
+            onPress={() => router.push('/settings')}
+            accessibilityRole="button"
+            accessibilityLabel="Settings"
+            hitSlop={10}
+            style={({ pressed }) => [styles.gear, { opacity: pressed ? 0.5 : 1 }]}>
+            <Icon name="settings" size={24} color={theme.accent} />
+          </Pressable>
+        </View>
+
+        <SyncStatusLine />
+
+        <View style={styles.searchWrap}>
+          <SearchField onPress={() => router.push('/search')} />
+        </View>
+
+        <View style={styles.group}>
+          <ListRow
+            icon="all-notes"
+            label="All Notes"
+            count={allNotesCount}
+            onPress={() => router.push({ pathname: '/folder/[id]', params: { id: ALL_NOTES_FOLDER } })}
+          />
+        </View>
+
+        {folders.length > 0 && (
+          <>
+            <ThemedText type="smallBold" themeColor="textSecondary" style={styles.sectionHeader}>
+              MY FOLDERS
+            </ThemedText>
+            <View style={styles.group}>
+              {folders.map((folder, index) => (
+                <View key={folder.id}>
+                  {index > 0 && <View style={[styles.divider, { backgroundColor: theme.separator }]} />}
+                  <ListRow
+                    icon="folder"
+                    label={folder.name}
+                    count={folder.noteCount}
+                    onPress={() => router.push({ pathname: '/folder/[id]', params: { id: folder.id } })}
+                    onLongPress={() => handleFolderLongPress(folder)}
+                  />
+                </View>
+              ))}
+            </View>
+          </>
+        )}
+
+        <View style={styles.spacer} />
+        <View style={styles.group}>
+          <ListRow
+            icon="trash"
+            iconColor={theme.textSecondary}
+            label="Recently Deleted"
+            count={trashCount}
+            onPress={() => router.push('/trash')}
+          />
+        </View>
+      </ScrollView>
+
+      <View
+        style={[
+          styles.toolbar,
+          {
+            paddingBottom: insets.bottom + Spacing.two,
+            borderColor: theme.separator,
+            backgroundColor: theme.background,
+          },
+        ]}>
+        <Pressable
+          onPress={() => router.push({ pathname: '/folder-edit' })}
+          accessibilityRole="button"
+          accessibilityLabel="New folder"
+          hitSlop={8}
+          style={({ pressed }) => [styles.toolbarBtn, { opacity: pressed ? 0.6 : 1 }]}>
+          <Icon name="folder-plus" size={20} color={theme.accent} />
+          <ThemedText type="default" style={{ color: theme.accent }}>
+            New Folder
           </ThemedText>
-        </ThemedView>
-
-        <ThemedText type="code" style={styles.code}>
-          get started
-        </ThemedText>
-
-        <ThemedView type="backgroundElement" style={styles.stepContainer}>
-          <HintRow
-            title="Try editing"
-            hint={<ThemedText type="code">src/app/index.tsx</ThemedText>}
-          />
-          <HintRow title="Dev tools" hint={getDevMenuHint()} />
-          <HintRow
-            title="Fresh start"
-            hint={<ThemedText type="code">npm run reset-project</ThemedText>}
-          />
-        </ThemedView>
-
-        {Platform.OS === 'web' && <WebBadge />}
-      </SafeAreaView>
+        </Pressable>
+        <Pressable
+          onPress={handleNewNote}
+          accessibilityRole="button"
+          accessibilityLabel="New note"
+          hitSlop={8}
+          style={({ pressed }) => [styles.toolbarBtn, { opacity: pressed ? 0.6 : 1 }]}>
+          <Icon name="compose" size={20} color={theme.accent} />
+          <ThemedText style={[styles.compose, { color: theme.accent }]}>New Note</ThemedText>
+        </Pressable>
+      </View>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    justifyContent: 'center',
+  container: { flex: 1 },
+  content: { flexGrow: 1 },
+  titleRow: {
     flexDirection: 'row',
-  },
-  safeArea: {
-    flex: 1,
-    paddingHorizontal: Spacing.four,
     alignItems: 'center',
-    gap: Spacing.three,
-    paddingBottom: BottomTabInset + Spacing.three,
-    maxWidth: MaxContentWidth,
-  },
-  heroSection: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    flex: 1,
+    justifyContent: 'space-between',
     paddingHorizontal: Spacing.four,
-    gap: Spacing.four,
+    paddingBottom: Spacing.two,
   },
-  title: {
-    textAlign: 'center',
+  gear: { padding: Spacing.one },
+  searchWrap: { marginTop: Spacing.two, marginBottom: Spacing.four },
+  sectionHeader: {
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.four,
+    paddingBottom: Spacing.one,
+    letterSpacing: 0.5,
   },
-  code: {
-    textTransform: 'uppercase',
+  group: { marginHorizontal: Spacing.three, borderRadius: 12, overflow: 'hidden' },
+  divider: { height: StyleSheet.hairlineWidth, marginLeft: Spacing.four + 26 + Spacing.three },
+  spacer: { height: Spacing.four },
+  toolbar: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    bottom: 0,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: Spacing.four,
+    paddingTop: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
   },
-  stepContainer: {
-    gap: Spacing.three,
-    alignSelf: 'stretch',
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.four,
-    borderRadius: Spacing.four,
-  },
+  toolbarBtn: { flexDirection: 'row', alignItems: 'center', gap: Spacing.two },
+  compose: { fontWeight: '600' },
 });

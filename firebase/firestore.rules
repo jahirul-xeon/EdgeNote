@@ -1,0 +1,16 @@
+rules_version = '2';
+
+// Every document lives under the authenticated owner's uid and is readable /
+// writable only by that user (§30). Never trust a client-supplied userId.
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // The user's own profile document (users/{uid}).
+    match /users/{userId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    // Everything under it: notes, folders, etc.
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
