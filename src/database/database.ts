@@ -12,7 +12,7 @@ import * as SQLite from 'expo-sqlite';
 const DATABASE_NAME = 'notes.db';
 
 /** Current schema version. Bump and add a migration block below when changing schema. */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -102,7 +102,35 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
     );
   }
 
-  // Future migrations: `if (currentVersion < 3) { ... }`, etc.
+  if (currentVersion < 3) {
+    // Structured (rich) note content is stored alongside the flattened plain
+    // text: `content` stays the searchable/preview text, `blocks_json` holds
+    // the editor's block model (paragraphs, checklists, headings, media).
+    await db.execAsync(`
+      ALTER TABLE notes ADD COLUMN blocks_json TEXT;
+
+      CREATE TABLE IF NOT EXISTS attachments (
+        id TEXT PRIMARY KEY,
+        note_id TEXT NOT NULL,
+        type TEXT NOT NULL DEFAULT 'file',
+        local_uri TEXT,
+        remote_url TEXT,
+        storage_path TEXT,
+        name TEXT,
+        mime_type TEXT,
+        size INTEGER,
+        width INTEGER,
+        height INTEGER,
+        upload_status TEXT NOT NULL DEFAULT 'pending',
+        created_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_attachments_note ON attachments (note_id);
+      CREATE INDEX IF NOT EXISTS idx_attachments_upload ON attachments (upload_status);
+    `);
+  }
+
+  // Future migrations: `if (currentVersion < 4) { ... }`, etc.
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }
@@ -114,5 +142,6 @@ export async function resetDatabase(): Promise<void> {
     DELETE FROM notes;
     DELETE FROM folders;
     DELETE FROM sync_queue;
+    DELETE FROM attachments;
   `);
 }

@@ -32,7 +32,14 @@
           "imageWidth": 76
         }
       ],
-      "expo-sqlite"
+      "expo-sqlite",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow $(PRODUCT_NAME) to add photos from your library to notes.",
+          "cameraPermission": "Allow $(PRODUCT_NAME) to take photos to add to notes."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

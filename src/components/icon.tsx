@@ -5,7 +5,9 @@
  */
 import {
   AlertCircle,
+  Camera,
   Check,
+  CheckSquare,
   ChevronRight,
   Cloud,
   CloudOff,
@@ -14,13 +16,18 @@ import {
   Folder,
   FolderInput,
   FolderPlus,
+  Heading1,
+  Image as ImageIcon,
+  List,
   LogOut,
   NotebookText,
+  Paperclip,
   Pin,
   Plus,
   RefreshCw,
   Search,
   Settings,
+  Square,
   SquarePen,
   Trash2,
   User,
@@ -54,6 +61,13 @@ const ICONS = {
   error: AlertCircle,
   'wifi-off': WifiOff,
   close: X,
+  heading: Heading1,
+  'bullet-list': List,
+  checkbox: Square,
+  'checkbox-checked': CheckSquare,
+  image: ImageIcon,
+  camera: Camera,
+  attach: Paperclip,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

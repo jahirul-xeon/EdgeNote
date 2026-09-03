@@ -29,6 +29,7 @@ type NoteRow = {
   user_id: string;
   title: string;
   content: string;
+  blocks_json: string | null;
   content_format: string;
   folder_id: string | null;
   tags_json: string;
@@ -57,6 +58,7 @@ function mapRow(row: NoteRow): Note {
     userId: row.user_id,
     title: row.title,
     content: row.content,
+    blocksJson: row.blocks_json,
     contentFormat: row.content_format as Note['contentFormat'],
     folderId: row.folder_id,
     tags,
@@ -187,6 +189,7 @@ export async function createNote(input: CreateNoteInput = {}): Promise<Note> {
     userId: LOCAL_USER_ID,
     title: input.title ?? '',
     content: input.content ?? '',
+    blocksJson: null,
     contentFormat: 'plain',
     folderId: input.folderId ?? null,
     tags: [],
@@ -251,6 +254,10 @@ export async function updateNote(id: string, patch: UpdateNotePatch): Promise<vo
     sets.push('content = ?');
     params.push(patch.content);
   }
+  if (patch.blocks !== undefined) {
+    sets.push('blocks_json = ?', "content_format = 'rich'");
+    params.push(JSON.stringify(patch.blocks));
+  }
   if (patch.folderId !== undefined) {
     sets.push('folder_id = ?');
     params.push(patch.folderId);
@@ -314,6 +321,7 @@ export async function restoreNote(id: string): Promise<void> {
 /** Hard delete: permanently removes a note row. */
 export async function permanentlyDeleteNote(id: string): Promise<void> {
   const db = await getDatabase();
+  await db.runAsync('DELETE FROM attachments WHERE note_id = ?', id);
   await db.runAsync('DELETE FROM notes WHERE id = ?', id);
   await enqueue('note', id, 'delete', {});
   emitChange();
@@ -353,15 +361,16 @@ export async function upsertRemoteNote(note: Note): Promise<void> {
   const db = await getDatabase();
   await db.runAsync(
     `INSERT OR REPLACE INTO notes (
-       id, user_id, title, content, content_format, folder_id, tags_json,
+       id, user_id, title, content, blocks_json, content_format, folder_id, tags_json,
        is_pinned, is_locked, is_deleted, created_at, updated_at, deleted_at,
        sync_status, sync_version, device_id
-     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)`,
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)`,
     [
       note.id,
       note.userId,
       note.title,
       note.content,
+      note.blocksJson,
       note.contentFormat,
       note.folderId,
       JSON.stringify(note.tags),

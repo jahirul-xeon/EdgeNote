@@ -15,6 +15,14 @@ import {
   upsertRemoteFolder,
 } from '@/database/foldersRepository';
 import {
+  getAttachment,
+  getAttachmentsByNote,
+  getPendingUploads,
+  markAttachmentUploaded,
+  setUploadStatus,
+  upsertAttachment,
+} from '@/database/attachmentsRepository';
+import {
   claimNotesForUser,
   getNote,
   markNoteSynced,
@@ -35,6 +43,7 @@ import {
   setRemoteFolder,
   setRemoteNote,
 } from '@/services/firebase/firestore';
+import { uploadAttachment } from '@/services/firebase/storage';
 import { getNetworkState } from '@/services/network/networkMonitor';
 import { remoteWins } from '@/services/sync/conflictResolver';
 import { setSyncState } from '@/services/sync/syncStatus';
@@ -109,7 +118,25 @@ async function runOnce(uid: string): Promise<void> {
   }
 }
 
+/** Uploads attachment files to Storage, then re-queues their notes to refresh URLs. */
+async function uploadPendingAttachments(uid: string): Promise<void> {
+  const pending = await getPendingUploads();
+  for (const attachment of pending) {
+    try {
+      await setUploadStatus(attachment.id, 'uploading');
+      const { remoteUrl, storagePath } = await uploadAttachment(uid, attachment);
+      await markAttachmentUploaded(attachment.id, remoteUrl, storagePath);
+      // Ensure the owning note's remote doc picks up the new URL.
+      await enqueue('note', attachment.noteId, 'update', {});
+    } catch {
+      await setUploadStatus(attachment.id, 'failed');
+    }
+  }
+}
+
 async function pushLocalChanges(uid: string): Promise<void> {
+  await uploadPendingAttachments(uid);
+
   const items = await getDueSyncItems();
   for (const item of items) {
     try {
@@ -121,7 +148,8 @@ async function pushLocalChanges(uid: string): Promise<void> {
           if (!note) {
             await deleteRemoteNote(uid, item.entityId);
           } else {
-            await setRemoteNote(uid, { ...note, userId: uid });
+            const attachments = await getAttachmentsByNote(note.id);
+            await setRemoteNote(uid, { ...note, userId: uid }, attachments);
             await markNoteSynced(note.id);
           }
         }
@@ -167,10 +195,19 @@ async function pullRemoteChanges(uid: string): Promise<void> {
     maxUpdated = Math.max(maxUpdated, remote.updatedAt);
   }
 
-  for (const remote of notes) {
+  for (const { note: remote, attachments } of notes) {
     const local = await getNote(remote.id);
     if (!local || remoteWins(local, remote)) {
       await upsertRemoteNote(remote);
+    }
+    // Reconcile attachment metadata: adopt unseen ones; teach local rows the URL.
+    for (const att of attachments) {
+      const localAtt = await getAttachment(att.id);
+      if (!localAtt) {
+        await upsertAttachment(att);
+      } else if (!localAtt.remoteUrl && att.remoteUrl && att.storagePath) {
+        await markAttachmentUploaded(att.id, att.remoteUrl, att.storagePath);
+      }
     }
     maxUpdated = Math.max(maxUpdated, remote.updatedAt);
   }
