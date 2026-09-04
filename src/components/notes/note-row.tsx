@@ -12,9 +12,11 @@ type NoteRowProps = {
   note: Note;
   onPress: (note: Note) => void;
   onLongPress?: (note: Note) => void;
+  /** Draws a hairline separator above the row, inset to align with the title. */
+  topDivider?: boolean;
 };
 
-function NoteRowComponent({ note, onPress, onLongPress }: NoteRowProps) {
+function NoteRowComponent({ note, onPress, onLongPress, topDivider }: NoteRowProps) {
   const theme = useTheme();
   const title = deriveTitle(note.content) || 'New Note';
   const preview = derivePreview(note.content);
@@ -31,6 +33,7 @@ function NoteRowComponent({ note, onPress, onLongPress }: NoteRowProps) {
         styles.row,
         { backgroundColor: pressed ? theme.backgroundSelected : theme.background },
       ]}>
+      {topDivider && <View style={[styles.divider, { backgroundColor: theme.separator }]} />}
       <View style={styles.titleLine}>
         {note.isPinned && (
           <View style={styles.pin}>
@@ -63,6 +66,13 @@ const styles = StyleSheet.create({
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.four,
     gap: Spacing.one,
+  },
+  divider: {
+    position: 'absolute',
+    top: 0,
+    left: Spacing.four,
+    right: 0,
+    height: StyleSheet.hairlineWidth,
   },
   titleLine: {
     flexDirection: 'row',

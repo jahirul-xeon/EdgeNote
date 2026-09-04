@@ -32,21 +32,25 @@ import {
   enqueue,
   getDueSyncItems,
   getPendingSyncCount,
+  hasLocalEntities,
   recordSyncFailure,
   removeSyncItem,
 } from '@/database/syncRepository';
 import {
   deleteRemoteFolder,
   deleteRemoteNote,
+  fetchAllRemoteFolders,
+  fetchAllRemoteNotes,
   fetchRemoteFoldersSince,
   fetchRemoteNotesSince,
   setRemoteFolder,
   setRemoteNote,
-} from '@/services/firebase/firestore';
-import { uploadAttachment } from '@/services/firebase/storage';
+} from '@/services/edgeflare/notesApi';
+import { uploadAttachment } from '@/services/edgeflare/storage';
 import { getNetworkState } from '@/services/network/networkMonitor';
 import { remoteWins } from '@/services/sync/conflictResolver';
 import { setSyncState } from '@/services/sync/syncStatus';
+import { withChangeOrigin } from '@/database/changeBus';
 
 let running = false;
 let rerunRequested = false;
@@ -69,6 +73,20 @@ async function setLastSyncAt(uid: string, value: number): Promise<void> {
     await AsyncStorage.setItem(lastSyncKey(uid), String(value));
   } catch {
     // Non-fatal: a missed persist just re-pulls some rows next time.
+  }
+}
+
+/**
+ * Resets the incremental-pull watermark so the next sync re-pulls every remote
+ * row from scratch. Call this after wiping the local database ("Clear local
+ * cache") — otherwise the stored watermark makes the pull skip cloud rows that
+ * are older than the last sync, and the wiped data never comes back.
+ */
+export async function resetSyncCursor(uid: string): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(lastSyncKey(uid));
+  } catch {
+    // Non-fatal: a stuck watermark just delays the full re-pull.
   }
 }
 
@@ -106,8 +124,13 @@ async function runOnce(uid: string): Promise<void> {
 
   setSyncState({ phase: 'syncing' });
   try {
-    await pushLocalChanges(uid);
-    await pullRemoteChanges(uid);
+    // Tag every DB write this run makes as 'sync' so the change bus doesn't feed
+    // it back to the sync scheduler (which would loop endlessly). UI listeners
+    // still refresh, so pulled-in data appears immediately.
+    await withChangeOrigin('sync', async () => {
+      await pushLocalChanges(uid);
+      await pullRemoteChanges(uid);
+    });
     setSyncState({
       phase: 'idle',
       lastSyncAt: Date.now(),
@@ -175,10 +198,15 @@ async function pushLocalChanges(uid: string): Promise<void> {
 }
 
 async function pullRemoteChanges(uid: string): Promise<void> {
-  const since = await getLastSyncAt(uid);
+  // When the device has no local notes/folders (a fresh install or a cleared
+  // cache), the incremental `updated_at` watermark is meaningless — every
+  // remote row is older than it, so it would pull nothing. In that case fetch
+  // everything owned by this uid instead. Otherwise pull incrementally.
+  const empty = !(await hasLocalEntities());
+  const since = empty ? 0 : await getLastSyncAt(uid);
   const [folders, notes] = await Promise.all([
-    fetchRemoteFoldersSince(uid, since),
-    fetchRemoteNotesSince(uid, since),
+    empty ? fetchAllRemoteFolders(uid) : fetchRemoteFoldersSince(uid, since),
+    empty ? fetchAllRemoteNotes(uid) : fetchRemoteNotesSince(uid, since),
   ]);
 
   let maxUpdated = since;

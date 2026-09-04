@@ -13,8 +13,8 @@ End-to-end flows for the critical paths (§61, §62).
 ## Run
 
 ```bash
-maestro test --env APP_ID=com.yourorg.iosnote .maestro/create-note.yaml
-maestro test --env APP_ID=com.yourorg.iosnote .maestro/search-and-delete.yaml
+maestro test --env APP_ID=com.yourorg.edgenote .maestro/create-note.yaml
+maestro test --env APP_ID=com.yourorg.edgenote .maestro/search-and-delete.yaml
 ```
 
 ## Flows

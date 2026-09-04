@@ -3,15 +3,15 @@
  * engine on the events that matter (§34): sign-in, network regained, app
  * foregrounded, and (debounced) local edits.
  *
- * When Firebase is not configured, this stays inert and the app runs purely
+ * When edgeflare is not configured, this stays inert and the app runs purely
  * local — the golden rule holds either way (§75).
  */
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { AppState } from 'react-native';
 
 import { subscribeToChanges } from '@/database/changeBus';
-import { subscribeToAuth, signOutUser, type AuthUser } from '@/services/firebase/firebaseAuth';
-import { isFirebaseConfigured } from '@/services/firebase/firebaseConfig';
+import { subscribeToAuth, signOutUser, type AuthUser } from '@/services/edgeflare/auth';
+import { isEdgeflareConfigured } from '@/services/edgeflare/config';
 import { subscribeToNetwork } from '@/services/network/networkMonitor';
 import { claimLocalData, requestSync } from '@/services/sync/syncEngine';
 import { setSyncState } from '@/services/sync/syncStatus';
@@ -30,12 +30,12 @@ const CHANGE_SYNC_DEBOUNCE = 1500;
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<AuthUser | null>(null);
-  const [initializing, setInitializing] = useState(isFirebaseConfigured);
+  const [initializing, setInitializing] = useState(isEdgeflareConfigured);
   const previousUid = useRef<string | null>(null);
 
   // Track auth state, claiming local data + syncing on a fresh sign-in.
   useEffect(() => {
-    if (!isFirebaseConfigured) {
+    if (!isEdgeflareConfigured) {
       setInitializing(false);
       return;
     }
@@ -71,7 +71,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (status === 'active') requestSync(uid);
     });
 
-    const changeUnsub = subscribeToChanges(() => {
+    const changeUnsub = subscribeToChanges((origin) => {
+      // Ignore writes the sync engine itself made while applying remote data —
+      // reacting to them would loop (sync → write → sync → …). Only real local
+      // edits schedule a push.
+      if (origin === 'sync') return;
       if (debounce) clearTimeout(debounce);
       debounce = setTimeout(() => requestSync(uid), CHANGE_SYNC_DEBOUNCE);
     });
@@ -86,7 +90,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const value: AuthContextValue = {
     user,
-    isConfigured: isFirebaseConfigured,
+    isConfigured: isEdgeflareConfigured,
     initializing,
     signOut: async () => {
       await signOutUser();

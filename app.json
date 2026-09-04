@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "ios-note",
-    "slug": "ios-note",
+    "name": "Edge Note",
+    "slug": "edge-note",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/app-icon.png",
-    "scheme": "iosnote",
+    "scheme": "edgenote",
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/images/app-icon.png"

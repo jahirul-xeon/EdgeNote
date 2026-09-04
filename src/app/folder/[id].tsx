@@ -104,13 +104,18 @@ export default function FolderNotesScreen() {
         keyExtractor={(item) => (item.type === 'header' ? `h-${item.title}` : item.note.id)}
         getItemType={(item) => item.type}
         contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
-        renderItem={({ item }) =>
+        renderItem={({ item, index }) =>
           item.type === 'header' ? (
             <ThemedText type="smallBold" themeColor="textSecondary" style={styles.sectionHeader}>
               {item.title}
             </ThemedText>
           ) : (
-            <NoteRow note={item.note} onPress={openNote} onLongPress={handleLongPress} />
+            <NoteRow
+              note={item.note}
+              onPress={openNote}
+              onLongPress={handleLongPress}
+              topDivider={index > 0 && data[index - 1]?.type === 'note'}
+            />
           )
         }
         ListEmptyComponent={

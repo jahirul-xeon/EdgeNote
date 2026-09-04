@@ -1,6 +1,7 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { KeyboardAvoidingView, Platform, Pressable, StyleSheet, TextInput, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
@@ -11,6 +12,7 @@ import { useTheme } from '@/hooks/use-theme';
 export default function FolderEditScreen() {
   const theme = useTheme();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { id } = useLocalSearchParams<{ id?: string }>();
   const isRename = Boolean(id);
   const [name, setName] = useState('');
@@ -42,52 +44,76 @@ export default function FolderEditScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <View style={styles.header}>
-        <Pressable onPress={() => router.back()} hitSlop={8} accessibilityRole="button">
-          <ThemedText type="default" style={{ color: theme.accent }}>
-            Cancel
+      <KeyboardAvoidingView
+        style={styles.flex}
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        {/* Insets keep the header clear of the status bar / notch on full-screen
+            modals, and let content breathe in landscape. */}
+        <View
+          style={[
+            styles.header,
+            {
+              paddingTop: Math.max(insets.top, Spacing.two),
+              paddingLeft: Spacing.four + insets.left,
+              paddingRight: Spacing.four + insets.right,
+            },
+          ]}>
+          <Pressable onPress={() => router.back()} hitSlop={8} accessibilityRole="button">
+            <ThemedText type="default" style={{ color: theme.accent }}>
+              Cancel
+            </ThemedText>
+          </Pressable>
+          <ThemedText type="default" style={styles.title}>
+            {isRename ? 'Rename Folder' : 'New Folder'}
           </ThemedText>
-        </Pressable>
-        <ThemedText type="default" style={styles.title}>
-          {isRename ? 'Rename Folder' : 'New Folder'}
-        </ThemedText>
-        <Pressable onPress={handleSave} hitSlop={8} disabled={!canSave} accessibilityRole="button">
-          <ThemedText
-            type="default"
-            style={{ color: canSave ? theme.accent : theme.textSecondary, fontWeight: '600' }}>
-            {isRename ? 'Save' : 'Done'}
-          </ThemedText>
-        </Pressable>
-      </View>
+          <Pressable onPress={handleSave} hitSlop={8} disabled={!canSave} accessibilityRole="button">
+            <ThemedText
+              type="default"
+              style={{ color: canSave ? theme.accent : theme.textSecondary, fontWeight: '600' }}>
+              {isRename ? 'Save' : 'Done'}
+            </ThemedText>
+          </Pressable>
+        </View>
 
-      <View style={styles.body}>
-        <TextInput
-          ref={inputRef}
-          value={name}
-          onChangeText={setName}
-          placeholder="Folder Name"
-          placeholderTextColor={theme.textSecondary}
-          style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
-          autoFocus
-          returnKeyType="done"
-          onSubmitEditing={handleSave}
-          maxLength={60}
-        />
-      </View>
+        <View
+          style={[
+            styles.body,
+            { paddingLeft: Spacing.three + insets.left, paddingRight: Spacing.three + insets.right },
+          ]}>
+          {/* maxWidth centers the field on tablets/large screens instead of
+              stretching edge to edge. */}
+          <View style={styles.field}>
+            <TextInput
+              ref={inputRef}
+              value={name}
+              onChangeText={setName}
+              placeholder="Folder Name"
+              placeholderTextColor={theme.textSecondary}
+              style={[styles.input, { backgroundColor: theme.backgroundElement, color: theme.text }]}
+              autoFocus
+              returnKeyType="done"
+              onSubmitEditing={handleSave}
+              maxLength={60}
+            />
+          </View>
+        </View>
+      </KeyboardAvoidingView>
     </ThemedView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  flex: { flex: 1 },
   header: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    padding: Spacing.four,
+    paddingBottom: Spacing.four,
   },
   title: { fontWeight: '600' },
-  body: { paddingHorizontal: Spacing.three, paddingTop: Spacing.two },
+  body: { paddingTop: Spacing.two, alignItems: 'center' },
+  field: { width: '100%', maxWidth: 500 },
   input: {
     height: 44,
     borderRadius: 10,

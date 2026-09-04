@@ -7,6 +7,7 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { resetDatabase } from '@/database/database';
+import { resetSyncCursor } from '@/services/sync/syncEngine';
 import { useSyncStatus } from '@/hooks/use-sync-status';
 import { useTheme } from '@/hooks/use-theme';
 import { useAppearance, type AppearancePreference } from '@/store/appearance';
@@ -99,9 +100,24 @@ export default function SettingsScreen() {
   };
 
   const handleClearCache = () => {
-    Alert.alert('Clear Local Cache?', 'This permanently deletes all local notes and folders.', [
+    const message = user
+      ? 'This clears all local notes and folders. Anything already synced will be pulled back from the cloud.'
+      : 'This permanently deletes all local notes and folders.';
+    Alert.alert('Clear Local Cache?', message, [
       { text: 'Cancel', style: 'cancel' },
-      { text: 'Clear', style: 'destructive', onPress: () => resetDatabase() },
+      {
+        text: 'Clear',
+        style: 'destructive',
+        onPress: async () => {
+          await resetDatabase();
+          // When signed in, wipe the pull watermark and re-sync so cloud data
+          // flows back in; without this the incremental pull skips it.
+          if (user) {
+            await resetSyncCursor(user.uid);
+            syncNow();
+          }
+        },
+      },
     ]);
   };
 
@@ -115,9 +131,9 @@ export default function SettingsScreen() {
           {!isConfigured ? (
             <View style={styles.note}>
               <ThemedText type="small" themeColor="textSecondary">
-                Cloud sync isn&apos;t configured. Add your Firebase keys to a{' '}
-                <ThemedText type="code">.env</ThemedText> file to enable syncing. Your notes are
-                saved on this device regardless.
+                Cloud sync isn&apos;t configured. Add your edgeflare tenant to a{' '}
+                <ThemedText type="code">.env.local</ThemedText> file to enable syncing. Your notes
+                are saved on this device regardless.
               </ThemedText>
             </View>
           ) : user ? (

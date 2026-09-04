@@ -145,6 +145,19 @@ export async function getPendingSyncCount(): Promise<number> {
   return row?.count ?? 0;
 }
 
+/**
+ * Whether any notes or folders exist locally (including soft-deleted). Used by
+ * the pull to detect a wiped device: when nothing is local, the incremental
+ * watermark is meaningless and we must pull everything from scratch.
+ */
+export async function hasLocalEntities(): Promise<boolean> {
+  const db = await getDatabase();
+  const row = await db.getFirstAsync<{ count: number }>(
+    'SELECT (SELECT COUNT(*) FROM notes) + (SELECT COUNT(*) FROM folders) AS count',
+  );
+  return (row?.count ?? 0) > 0;
+}
+
 function safeParse(json: string): unknown {
   try {
     return JSON.parse(json);
