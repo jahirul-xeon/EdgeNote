@@ -71,6 +71,21 @@ async function readText(uri: string): Promise<string> {
   }
 }
 
+/**
+ * Reads a file as a latin1/binary string. RTF isn't UTF-8, so `File.text()`
+ * throws on encoding detection; the raw bytes work because RTF's structure is
+ * ASCII and non-ASCII characters arrive as `\'hh` escapes that rtfToText decodes.
+ */
+async function readBinaryString(uri: string): Promise<string> {
+  const bytes = await new File(uri).bytes();
+  let out = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    out += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return out;
+}
+
 // ── export ───────────────────────────────────────────────────────────
 
 function blocksToMarkdown(blocks: ContentBlock[], byId: Record<string, Attachment>): string {
@@ -260,7 +275,7 @@ async function importRtfdBundle(
 
   const rtfFile = files.find((f) => f.name.toLowerCase().endsWith('.rtf'));
   const imageFiles = files.filter((f) => isImage(f.name, null));
-  const rawText = rtfFile ? rtfToText(await rtfFile.text()) : '';
+  const rawText = rtfFile ? rtfToText(await readBinaryString(rtfFile.uri)) : '';
   const textBlocks = rawText.trim().length > 0 ? markdownToBlocks(rawText) : [];
 
   if (textBlocks.length === 0 && imageFiles.length === 0) {
@@ -380,7 +395,7 @@ async function importAsset(
     return importRtfdBundle(asset, folderId);
   }
   if (ext === 'rtf') {
-    const blocks = markdownToBlocks(rtfToText(await readText(asset.uri)));
+    const blocks = markdownToBlocks(rtfToText(await readBinaryString(asset.uri)));
     const content = blocksToPlainText(blocks);
     const note = await createNote({ title: baseTitle, folderId });
     await updateNote(note.id, { blocks, content, title: baseTitle || deriveTitle(content) });
