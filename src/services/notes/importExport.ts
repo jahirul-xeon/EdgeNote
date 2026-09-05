@@ -14,7 +14,11 @@
  */
 import * as DocumentPicker from 'expo-document-picker';
 import { Directory, File, Paths } from 'expo-file-system';
+import { EncodingType, writeAsStringAsync } from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
+
+import { htmlToText } from '@/utils/htmlText';
+import { rtfToText } from '@/utils/rtf';
 
 import { upsertAttachment } from '@/database/attachmentsRepository';
 import { createNote, permanentlyDeleteNote, updateNote } from '@/database/notesRepository';
@@ -242,6 +246,109 @@ async function importFromExport(
   return ids;
 }
 
+/**
+ * Imports an Apple Notes `.rtfd` bundle: it's a directory containing a `.rtf`
+ * (the rich text) plus any embedded images. We convert the RTF to text and
+ * attach the images.
+ */
+async function importRtfdBundle(
+  asset: DocumentPicker.DocumentPickerAsset,
+  folderId: string | null,
+): Promise<string[]> {
+  const baseTitle = (asset.name ?? 'Note').replace(/\.[^.]+$/, '');
+  const files = new Directory(asset.uri).list().filter((e): e is File => e instanceof File);
+
+  const rtfFile = files.find((f) => f.name.toLowerCase().endsWith('.rtf'));
+  const imageFiles = files.filter((f) => isImage(f.name, null));
+  const rawText = rtfFile ? rtfToText(await rtfFile.text()) : '';
+  const textBlocks = rawText.trim().length > 0 ? markdownToBlocks(rawText) : [];
+
+  if (textBlocks.length === 0 && imageFiles.length === 0) {
+    throw new Error('This .rtfd bundle has no readable content.');
+  }
+
+  const note = await createNote({ title: baseTitle, folderId });
+
+  const imageBlocks: ContentBlock[] = [];
+  for (const f of imageFiles) {
+    try {
+      const att = await saveImportedAttachment(note.id, { uri: f.uri, name: f.name }, 'image');
+      imageBlocks.push(createBlock('image', att.id));
+    } catch (e) {
+      console.warn('[import] rtfd image failed', f.name, e);
+    }
+  }
+
+  const blocks = [...textBlocks, ...imageBlocks];
+  const usable = blocks.length > 0 ? blocks : [createBlock('paragraph')];
+  const content = blocksToPlainText(usable);
+  await updateNote(note.id, { blocks: usable, content, title: baseTitle || deriveTitle(content) });
+  return [note.id];
+}
+
+/** Writes a base64 blob to a temp file and returns its uri (for ENEX resources). */
+async function writeBase64Temp(base64: string, name: string, mimeType: string): Promise<string> {
+  const dir = new Directory(Paths.cache, 'enex-import');
+  if (!dir.exists) dir.create();
+  const ext = extOf(name, mimeType) || 'bin';
+  const file = new File(dir, `${createId('res')}.${ext}`);
+  if (file.exists) file.delete();
+  await writeAsStringAsync(file.uri, base64, { encoding: EncodingType.Base64 });
+  return file.uri;
+}
+
+function firstMatch(source: string, re: RegExp): string {
+  return (source.match(re)?.[1] ?? '').trim();
+}
+
+/**
+ * Imports an Evernote `.enex` export. It's XML holding one or more `<note>`
+ * elements, each with a `<title>`, ENML `<content>` (XHTML), and base64
+ * `<resource>` attachments. Produces one note per `<note>`.
+ */
+async function importEnex(
+  asset: DocumentPicker.DocumentPickerAsset,
+  folderId: string | null,
+): Promise<string[]> {
+  const xml = await readText(asset.uri);
+  const noteBlocks = xml.match(/<note>[\s\S]*?<\/note>/gi) ?? [];
+  const ids: string[] = [];
+
+  for (const noteXml of noteBlocks) {
+    const title = htmlToText(firstMatch(noteXml, /<title>([\s\S]*?)<\/title>/i));
+    const enml = firstMatch(noteXml, /<content>([\s\S]*?)<\/content>/i)
+      .replace(/<!\[CDATA\[/g, '')
+      .replace(/\]\]>/g, '');
+    const textBlocks = markdownToBlocks(htmlToText(enml));
+
+    const note = await createNote({ title, folderId });
+
+    const mediaBlocks: ContentBlock[] = [];
+    const resources = noteXml.match(/<resource>[\s\S]*?<\/resource>/gi) ?? [];
+    for (const res of resources) {
+      const base64 = firstMatch(res, /<data[^>]*>([\s\S]*?)<\/data>/i).replace(/\s+/g, '');
+      if (!base64) continue;
+      const mime = firstMatch(res, /<mime>([\s\S]*?)<\/mime>/i) || 'application/octet-stream';
+      const fname = firstMatch(res, /<file-name>([\s\S]*?)<\/file-name>/i) || `attachment`;
+      try {
+        const uri = await writeBase64Temp(base64, fname, mime);
+        const type = mime.startsWith('image/') ? 'image' : 'file';
+        const att = await saveImportedAttachment(note.id, { uri, name: fname, mimeType: mime }, type);
+        mediaBlocks.push(createBlock(type, att.id));
+      } catch (e) {
+        console.warn('[import] enex resource failed', e);
+      }
+    }
+
+    const blocks = [...textBlocks, ...mediaBlocks];
+    const usable = blocks.length > 0 ? blocks : [createBlock('paragraph')];
+    const content = blocksToPlainText(usable);
+    await updateNote(note.id, { blocks: usable, content, title: title || deriveTitle(content) });
+    ids.push(note.id);
+  }
+  return ids;
+}
+
 /** Imports one picked file, returning the created note id(s). */
 async function importAsset(
   asset: DocumentPicker.DocumentPickerAsset,
@@ -249,9 +356,10 @@ async function importAsset(
 ): Promise<string[]> {
   const name = asset.name ?? 'Imported';
   const baseTitle = name.replace(/\.[^.]+$/, '');
+  const ext = extOf(asset.name, asset.mimeType);
 
   // 1) Our JSON export.
-  if (extOf(asset.name, asset.mimeType) === 'json') {
+  if (ext === 'json') {
     try {
       const parsed = JSON.parse(await readText(asset.uri));
       if (parsed && parsed.app === EXPORT_APP && Array.isArray(parsed.notes)) {
@@ -262,7 +370,34 @@ async function importAsset(
     }
   }
 
-  // 2) Text / Markdown → a note whose body is the parsed text.
+  // 2) Evernote export — may contain several notes.
+  if (ext === 'enex') {
+    return importEnex(asset, folderId);
+  }
+
+  // 3) Apple Notes rich text: `.rtfd` bundle or a standalone `.rtf`.
+  if (ext === 'rtfd') {
+    return importRtfdBundle(asset, folderId);
+  }
+  if (ext === 'rtf') {
+    const blocks = markdownToBlocks(rtfToText(await readText(asset.uri)));
+    const content = blocksToPlainText(blocks);
+    const note = await createNote({ title: baseTitle, folderId });
+    await updateNote(note.id, { blocks, content, title: baseTitle || deriveTitle(content) });
+    return [note.id];
+  }
+
+  // 4) HTML → convert tags to text/blocks (handled before generic text so we
+  // don't import raw markup).
+  if (ext === 'html' || ext === 'htm') {
+    const blocks = markdownToBlocks(htmlToText(await readText(asset.uri)));
+    const content = blocksToPlainText(blocks);
+    const note = await createNote({ title: baseTitle, folderId });
+    await updateNote(note.id, { blocks, content, title: baseTitle || deriveTitle(content) });
+    return [note.id];
+  }
+
+  // 5) Text / Markdown → a note whose body is the parsed text.
   if (isTextLike(asset.name, asset.mimeType)) {
     const text = await readText(asset.uri);
     const blocks = markdownToBlocks(text);
