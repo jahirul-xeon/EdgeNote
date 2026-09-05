@@ -151,6 +151,8 @@ export default function FolderNotesScreen() {
               onPress={openNote}
               onLongPress={handleLongPress}
               topDivider={index > 0 && data[index - 1]?.type === 'note'}
+              roundTop={index === 0 || data[index - 1]?.type === 'header'}
+              roundBottom={index === data.length - 1 || data[index + 1]?.type === 'header'}
             />
           )
         }

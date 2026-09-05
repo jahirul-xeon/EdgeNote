@@ -14,9 +14,20 @@ type NoteRowProps = {
   onLongPress?: (note: Note) => void;
   /** Draws a hairline separator above the row, inset to align with the title. */
   topDivider?: boolean;
+  /** Round the top corners (first row of a grouped card). */
+  roundTop?: boolean;
+  /** Round the bottom corners (last row of a grouped card). */
+  roundBottom?: boolean;
 };
 
-function NoteRowComponent({ note, onPress, onLongPress, topDivider }: NoteRowProps) {
+function NoteRowComponent({
+  note,
+  onPress,
+  onLongPress,
+  topDivider,
+  roundTop,
+  roundBottom,
+}: NoteRowProps) {
   const theme = useTheme();
   // Locked notes never reveal their content (title or preview) in the list.
   const locked = note.isLocked;
@@ -33,7 +44,13 @@ function NoteRowComponent({ note, onPress, onLongPress, topDivider }: NoteRowPro
       accessibilityLabel={`Note: ${title}`}
       style={({ pressed }) => [
         styles.row,
-        { backgroundColor: pressed ? theme.backgroundSelected : theme.background },
+        {
+          backgroundColor: pressed ? theme.backgroundSelected : theme.backgroundElement,
+          borderTopLeftRadius: roundTop ? 12 : 0,
+          borderTopRightRadius: roundTop ? 12 : 0,
+          borderBottomLeftRadius: roundBottom ? 12 : 0,
+          borderBottomRightRadius: roundBottom ? 12 : 0,
+        },
       ]}>
       {topDivider && <View style={[styles.divider, { backgroundColor: theme.separator }]} />}
       <View style={styles.titleLine}>
@@ -70,6 +87,7 @@ export const NoteRow = memo(NoteRowComponent);
 
 const styles = StyleSheet.create({
   row: {
+    marginHorizontal: Spacing.three,
     paddingVertical: Spacing.three,
     paddingHorizontal: Spacing.four,
     gap: Spacing.one,

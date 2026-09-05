@@ -615,7 +615,7 @@ export default function NoteEditorScreen() {
   }
 
   return (
-    <ThemedView style={styles.container}>
+    <ThemedView type="backgroundElement" style={styles.container}>
       <KeyboardAwareScrollView
         style={styles.flex}
         contentContainerStyle={styles.scroll}

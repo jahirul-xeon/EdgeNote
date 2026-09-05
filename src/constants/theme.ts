@@ -7,30 +7,40 @@ import "@/global.css";
 
 import { Platform } from "react-native";
 
+/**
+ * Edge Note palette — a modern indigo/violet system on iOS-style grouped
+ * surfaces: a soft canvas (`background`) with white/near-black cards
+ * (`backgroundElement`). Accent is a calm indigo that reads as premium in both
+ * light and dark.
+ */
 export const Colors = {
   light: {
-    text: "#000000",
-    background: "#ffffff",
-    backgroundElement: "#F0F0F3",
-    backgroundSelected: "#E0E1E6",
-    textSecondary: "#60646C",
-    accent: "#208AEF",
-    accentContrast: "#ffffff",
-    separator: "#E3E4E8",
+    text: "#1A1A24",
+    background: "#F4F4F8",
+    backgroundElement: "#FFFFFF",
+    backgroundSelected: "#ECECF3",
+    textSecondary: "#6C6C7A",
+    accent: "#5B5BD6",
+    accentContrast: "#FFFFFF",
+    separator: "#E6E6EE",
     danger: "#E5484D",
   },
   dark: {
-    text: "#ffffff",
-    background: "#000000",
-    backgroundElement: "#212225",
-    backgroundSelected: "#2E3135",
-    textSecondary: "#B0B4BA",
-    accent: "#3C9DFF",
-    accentContrast: "#ffffff",
-    separator: "#2A2B2F",
+    text: "#F4F4F8",
+    background: "#0C0C12",
+    backgroundElement: "#17171F",
+    backgroundSelected: "#23232E",
+    textSecondary: "#9A9AAC",
+    accent: "#8B8BF5",
+    accentContrast: "#FFFFFF",
+    separator: "#26262F",
     danger: "#FF6369",
   },
 } as const;
+
+/** Brand color for icons/splash (matches `accent`). */
+export const BrandColor = "#5B5BD6";
+export const BrandColorDark = "#4B45B8";
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
 
