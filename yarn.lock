@@ -8493,6 +8493,11 @@ test-exclude@^6.0.0:
     glob "^7.1.4"
     minimatch "^3.0.4"
 
+testflight@^1.0.4:
+  version "1.0.4"
+  resolved "https://registry.yarnpkg.com/testflight/-/testflight-1.0.4.tgz#e217b51035ef0d8288c48da8b5b7a1bb40de0c00"
+  integrity sha512-NaBVS4flwEbxtTRfzSmr42Go5SJ1bczSGKdBuG4GFIothO5vi8oeFcjWkNQztpb+e65TuGTrG8eXsnV0lc9f7A==
+
 throat@^5.0.0:
   version "5.0.0"
   resolved "https://registry.npmjs.org/throat/-/throat-5.0.0.tgz"

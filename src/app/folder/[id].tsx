@@ -8,6 +8,7 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Icon } from '@/components/icon';
 import { NoteRow } from '@/components/notes/note-row';
 import { OfflineBanner } from '@/components/offline-banner';
+import { SearchInput } from '@/components/search-input';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -57,19 +58,7 @@ export default function FolderNotesScreen() {
   }, [folderId]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({
-      title,
-      headerLargeTitle: true,
-      headerLargeTitleShadowVisible: false,
-      headerSearchBarOptions: {
-        placeholder: 'Search notes',
-        // Search + large title tuck into the nav bar on scroll; the small
-        // title shows in the header (standard iOS large-title behavior).
-        hideWhenScrolling: true,
-        onChangeText: (e: { nativeEvent: { text: string } }) => setQuery(e.nativeEvent.text),
-        onClose: () => setQuery(''),
-      },
-    });
+    navigation.setOptions({ title });
   }, [navigation, title]);
 
   const data = useMemo<ListItem[]>(() => {
@@ -168,9 +157,13 @@ export default function FolderNotesScreen() {
         keyExtractor={(item) => (item.type === 'header' ? `h-${item.title}` : item.note.id)}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
-        contentInsetAdjustmentBehavior="automatic"
         removeClippedSubviews={false}
-        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
+        ListHeaderComponent={
+          <View style={styles.searchWrap}>
+            <SearchInput value={query} onChangeText={setQuery} placeholder="Search notes" />
+          </View>
+        }
+        contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
         renderItem={({ item, index }) =>
           item.type === 'header' ? (
             <ThemedText style={styles.sectionHeader}>{item.title}</ThemedText>
@@ -243,6 +236,7 @@ export default function FolderNotesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  searchWrap: { paddingBottom: Spacing.one },
   sectionHeader: {
     fontSize: 20,
     lineHeight: 26,
