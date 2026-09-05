@@ -24,7 +24,7 @@ import { upsertAttachment } from '@/database/attachmentsRepository';
 import { createNote, permanentlyDeleteNote, updateNote } from '@/database/notesRepository';
 import { saveImportedAttachment } from '@/services/attachments/attachmentService';
 import { resolvePublicUrl } from '@/services/edgeflare/storage';
-import type { Attachment } from '@/types/attachment';
+import type { Attachment, AttachmentType } from '@/types/attachment';
 import type { ContentBlock } from '@/types/blocks';
 import type { Note } from '@/types/note';
 import { blocksToPlainText, createBlock, markdownToBlocks } from '@/utils/blocks';
@@ -51,11 +51,31 @@ function extOf(name?: string | null, mimeType?: string | null): string {
   return '';
 }
 
-const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp']);
+const IMAGE_EXTS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'heic', 'heif', 'bmp', 'tiff', 'tif']);
+const AUDIO_EXTS = new Set(['m4a', 'mp3', 'wav', 'aac', 'aiff', 'aif', 'caf', 'ogg', 'flac', 'amr']);
+const VIDEO_EXTS = new Set(['mp4', 'mov', 'm4v', 'avi', 'mkv', 'webm', '3gp']);
 const TEXT_EXTS = new Set(['txt', 'md', 'markdown', 'markdn', 'mdown', 'text', 'csv', 'log']);
 
 function isImage(name?: string | null, mimeType?: string | null): boolean {
   return (mimeType?.startsWith('image/') ?? false) || IMAGE_EXTS.has(extOf(name, mimeType));
+}
+
+/** Picks the attachment type and which block renders it, for any imported file. */
+function classifyAttachment(
+  name?: string | null,
+  mimeType?: string | null,
+): { attType: AttachmentType; blockType: 'image' | 'file' } {
+  const e = extOf(name, mimeType);
+  if ((mimeType?.startsWith('image/') ?? false) || IMAGE_EXTS.has(e)) {
+    return { attType: 'image', blockType: 'image' };
+  }
+  if ((mimeType?.startsWith('audio/') ?? false) || AUDIO_EXTS.has(e)) {
+    return { attType: 'audio', blockType: 'file' }; // rendered as an audio player
+  }
+  if ((mimeType?.startsWith('video/') ?? false) || VIDEO_EXTS.has(e)) {
+    return { attType: 'video', blockType: 'file' };
+  }
+  return { attType: 'file', blockType: 'file' };
 }
 
 function isTextLike(name?: string | null, mimeType?: string | null): boolean {
@@ -274,27 +294,32 @@ async function importRtfdBundle(
   const files = new Directory(asset.uri).list().filter((e): e is File => e instanceof File);
 
   const rtfFile = files.find((f) => f.name.toLowerCase().endsWith('.rtf'));
-  const imageFiles = files.filter((f) => isImage(f.name, null));
+  // Every non-rtf, non-empty, non-hidden file in the bundle is an attachment
+  // (images, audio, video, PDFs, …).
+  const mediaFiles = files.filter(
+    (f) => f !== rtfFile && !f.name.startsWith('.') && f.size > 0,
+  );
   const rawText = rtfFile ? rtfToText(await readBinaryString(rtfFile.uri)) : '';
   const textBlocks = rawText.trim().length > 0 ? markdownToBlocks(rawText) : [];
 
-  if (textBlocks.length === 0 && imageFiles.length === 0) {
+  if (textBlocks.length === 0 && mediaFiles.length === 0) {
     throw new Error('This .rtfd bundle has no readable content.');
   }
 
   const note = await createNote({ title: baseTitle, folderId });
 
-  const imageBlocks: ContentBlock[] = [];
-  for (const f of imageFiles) {
+  const mediaBlocks: ContentBlock[] = [];
+  for (const f of mediaFiles) {
     try {
-      const att = await saveImportedAttachment(note.id, { uri: f.uri, name: f.name }, 'image');
-      imageBlocks.push(createBlock('image', att.id));
+      const { attType, blockType } = classifyAttachment(f.name, null);
+      const att = await saveImportedAttachment(note.id, { uri: f.uri, name: f.name }, attType);
+      mediaBlocks.push(createBlock(blockType, att.id));
     } catch (e) {
-      console.warn('[import] rtfd image failed', f.name, e);
+      console.warn('[import] rtfd attachment failed', f.name, e);
     }
   }
 
-  const blocks = [...textBlocks, ...imageBlocks];
+  const blocks = [...textBlocks, ...mediaBlocks];
   const usable = blocks.length > 0 ? blocks : [createBlock('paragraph')];
   const content = blocksToPlainText(usable);
   await updateNote(note.id, { blocks: usable, content, title: baseTitle || deriveTitle(content) });
@@ -347,9 +372,9 @@ async function importEnex(
       const fname = firstMatch(res, /<file-name>([\s\S]*?)<\/file-name>/i) || `attachment`;
       try {
         const uri = await writeBase64Temp(base64, fname, mime);
-        const type = mime.startsWith('image/') ? 'image' : 'file';
-        const att = await saveImportedAttachment(note.id, { uri, name: fname, mimeType: mime }, type);
-        mediaBlocks.push(createBlock(type, att.id));
+        const { attType, blockType } = classifyAttachment(fname, mime);
+        const att = await saveImportedAttachment(note.id, { uri, name: fname, mimeType: mime }, attType);
+        mediaBlocks.push(createBlock(blockType, att.id));
       } catch (e) {
         console.warn('[import] enex resource failed', e);
       }
@@ -422,18 +447,18 @@ async function importAsset(
     return [note.id];
   }
 
-  // 3) Image or 4) any other file → a note with the file attached. Create the
-  // note only if the attachment persists, so a failure (e.g. an .rtfd bundle)
-  // doesn't leave an empty orphan note behind.
-  const type = isImage(asset.name, asset.mimeType) ? 'image' : 'file';
+  // 6) Any single file (image, audio, video, pdf, …) → a note with it attached.
+  // Create the note only if the attachment persists, so a failure (e.g. an
+  // .rtfd bundle) doesn't leave an empty orphan note behind.
+  const { attType, blockType } = classifyAttachment(asset.name, asset.mimeType);
   const note = await createNote({ title: baseTitle, folderId });
   try {
     const attachment = await saveImportedAttachment(
       note.id,
       { uri: asset.uri, name: asset.name, mimeType: asset.mimeType, size: asset.size ?? null },
-      type,
+      attType,
     );
-    const blocks: ContentBlock[] = [createBlock(type, attachment.id), createBlock('paragraph')];
+    const blocks: ContentBlock[] = [createBlock(blockType, attachment.id), createBlock('paragraph')];
     await updateNote(note.id, { blocks, content: '', title: baseTitle });
     return [note.id];
   } catch (e) {
