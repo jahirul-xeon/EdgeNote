@@ -9,12 +9,23 @@
  * Upload happens later through the sync engine.
  */
 
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import * as DocumentPicker from "expo-document-picker";
 import { Directory, File, Paths } from "expo-file-system";
+import {
+  EncodingType,
+  StorageAccessFramework,
+  getContentUriAsync,
+  readAsStringAsync,
+  writeAsStringAsync,
+} from "expo-file-system/legacy";
 import * as ImagePicker from "expo-image-picker";
-import { Alert } from "react-native";
+import * as IntentLauncher from "expo-intent-launcher";
+import * as Sharing from "expo-sharing";
+import { Alert, Platform } from "react-native";
 
 import { insertAttachment } from "@/database/attachmentsRepository";
+import { resolvePublicUrl } from "@/services/edgeflare/storage";
 import type { Attachment, AttachmentType } from "@/types/attachment";
 import { createId } from "@/utils/id";
 
@@ -293,6 +304,150 @@ async function persistCopy(
       }`,
     );
   }
+}
+
+/* =========================================================
+   Open / share
+   ========================================================= */
+
+/**
+ * Returns a usable local file URI for an attachment.
+ *
+ * If the device already has the persisted local copy, that is used. Otherwise
+ * (e.g. the row was pulled from the cloud on another device and only has a
+ * remote URL) the file is downloaded into the attachments directory first.
+ */
+export async function ensureLocalUri(attachment: Attachment): Promise<string> {
+  if (attachment.localUri) {
+    try {
+      const existing = new File(attachment.localUri);
+      if (existing.exists && existing.size > 0) {
+        return attachment.localUri;
+      }
+    } catch {
+      // Fall through to download.
+    }
+  }
+
+  const url = resolvePublicUrl(attachment.remoteUrl);
+  if (!url) {
+    throw new Error("This attachment isn't available offline yet.");
+  }
+
+  const extension = extensionFor(url, attachment.name, attachment.mimeType);
+  const destination = new File(attachmentsDir(), `${attachment.id}.${extension}`);
+  if (destination.exists) {
+    destination.delete();
+  }
+
+  console.log(`[attach] Downloading remote attachment → ${destination.uri}`);
+  await File.downloadFileAsync(url, destination);
+
+  if (!destination.exists || destination.size <= 0) {
+    throw new Error("Downloaded attachment is empty.");
+  }
+  return destination.uri;
+}
+
+/** Opens the OS share sheet for a local file (used as an Android fallback and
+ *  as the iOS path — iOS's sheet includes a Quick Look preview). */
+async function shareLocalFile(localUri: string, attachment: Attachment): Promise<void> {
+  if (!(await Sharing.isAvailableAsync())) {
+    throw new Error("Sharing isn't supported on this device.");
+  }
+  await Sharing.shareAsync(localUri, {
+    mimeType: attachment.mimeType ?? undefined,
+    dialogTitle: attachment.name ?? undefined,
+    UTI: attachment.mimeType ?? undefined,
+  });
+}
+
+/**
+ * Shares an attachment via the OS share sheet (send to another app). Uses the
+ * local file, downloading the cloud copy first when needed.
+ */
+export async function shareAttachment(attachment: Attachment): Promise<void> {
+  const localUri = await ensureLocalUri(attachment);
+  await shareLocalFile(localUri, attachment);
+}
+
+/** Remembers the user's chosen download folder so we prompt only once. */
+const SAF_DIR_KEY = "attach:saf-download-dir";
+
+/**
+ * Saves an attachment into the device's shared storage (a real "Download").
+ *
+ * Android: writes the file into a user-picked folder (e.g. Downloads) via the
+ * Storage Access Framework — the folder is chosen once and remembered. iOS has
+ * no SAF, so it falls back to the share sheet's "Save to Files".
+ */
+export async function saveAttachmentToDevice(attachment: Attachment): Promise<void> {
+  const localUri = await ensureLocalUri(attachment);
+  const extension = extensionFor(localUri, attachment.name, attachment.mimeType);
+  const fileName = attachment.name ?? `${attachment.id}.${extension}`;
+  const mimeType = attachment.mimeType ?? "application/octet-stream";
+
+  if (Platform.OS !== "android") {
+    // iOS: the share sheet offers "Save to Files".
+    await shareLocalFile(localUri, attachment);
+    return;
+  }
+
+  const createInDir = async (dirUri: string): Promise<string> =>
+    StorageAccessFramework.createFileAsync(dirUri, fileName, mimeType);
+
+  let dirUri = await AsyncStorage.getItem(SAF_DIR_KEY);
+  let destUri: string;
+  try {
+    if (!dirUri) throw new Error("no-saved-dir");
+    destUri = await createInDir(dirUri);
+  } catch {
+    // No remembered folder, or the grant expired — ask the user to pick one.
+    const perm = await StorageAccessFramework.requestDirectoryPermissionsAsync();
+    if (!perm.granted) {
+      throw new Error("Storage permission was denied.");
+    }
+    dirUri = perm.directoryUri;
+    await AsyncStorage.setItem(SAF_DIR_KEY, dirUri);
+    destUri = await createInDir(dirUri);
+  }
+
+  const base64 = await readAsStringAsync(localUri, { encoding: EncodingType.Base64 });
+  await writeAsStringAsync(destUri, base64, { encoding: EncodingType.Base64 });
+  console.log(`[attach] Saved to device: ${fileName}`);
+}
+
+/**
+ * Opens an attachment for VIEWING, using the local file (downloading it first
+ * when the device only has the cloud copy). Works offline.
+ *
+ * Android uses ACTION_VIEW so the file opens in a real viewer (PDF reader,
+ * gallery, …) — NOT a share/upload sheet. A FileProvider `content://` URI plus
+ * a read-permission grant are required; a raw `file://` URI throws
+ * FileUriExposedException. If no app can view the type, we fall back to the
+ * share sheet. iOS uses the share sheet, whose preview acts as Quick Look.
+ */
+export async function openAttachmentExternally(attachment: Attachment): Promise<void> {
+  const localUri = await ensureLocalUri(attachment);
+
+  if (Platform.OS === "android") {
+    try {
+      const contentUri = await getContentUriAsync(localUri);
+      await IntentLauncher.startActivityAsync("android.intent.action.VIEW", {
+        data: contentUri,
+        flags: 1, // FLAG_GRANT_READ_URI_PERMISSION
+        type: attachment.mimeType ?? undefined,
+      });
+      return;
+    } catch (error) {
+      // No viewer app for this type (ActivityNotFoundException) — offer share.
+      console.log("[attach] ACTION_VIEW failed, falling back to share:", String(error));
+      await shareLocalFile(localUri, attachment);
+      return;
+    }
+  }
+
+  await shareLocalFile(localUri, attachment);
 }
 
 /* =========================================================

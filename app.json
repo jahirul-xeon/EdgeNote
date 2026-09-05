@@ -17,7 +17,9 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "predictiveBackGestureEnabled": false,
-      "permissions": ["android.permission.RECORD_AUDIO"],
+      "permissions": [
+        "android.permission.RECORD_AUDIO"
+      ],
       "package": "com.jahirul69.edgenote"
     },
     "web": {
@@ -41,7 +43,8 @@
           "photosPermission": "Allow $(PRODUCT_NAME) to add photos from your library to notes.",
           "cameraPermission": "Allow $(PRODUCT_NAME) to take photos to add to notes."
         }
-      ]
+      ],
+      "expo-sharing"
     ],
     "experiments": {
       "typedRoutes": true,

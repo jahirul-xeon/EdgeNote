@@ -9,20 +9,24 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react
 import {
   ActivityIndicator,
   Alert,
-  KeyboardAvoidingView,
-  Platform,
   Pressable,
-  ScrollView,
   StyleSheet,
   TextInput,
   View,
   type NativeSyntheticEvent,
   type TextInputKeyPressEventData,
 } from 'react-native';
+import {
+  KeyboardAwareScrollView,
+  KeyboardStickyView,
+} from 'react-native-keyboard-controller';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { GlassSurface } from '@/components/glass/glass-surface';
 import { Icon } from '@/components/icon';
+import { ImageViewerModal } from '@/components/media-viewer';
+import { Skeleton } from '@/components/skeleton';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Fonts, Spacing } from '@/constants/theme';
@@ -38,8 +42,11 @@ import { useNote } from '@/hooks/use-note';
 import { useTheme } from '@/hooks/use-theme';
 import {
   deleteLocalFile,
+  openAttachmentExternally,
   pickDocument,
   pickImageFromLibrary,
+  saveAttachmentToDevice,
+  shareAttachment,
   takePhoto,
 } from '@/services/attachments/attachmentService';
 import type { Attachment } from '@/types/attachment';
@@ -48,9 +55,31 @@ import { isTextBlock } from '@/types/blocks';
 import { resolvePublicUrl } from '@/services/edgeflare/storage';
 import { blocksToPlainText, createBlock, parseBlocks } from '@/utils/blocks';
 import { deriveTitle } from '@/utils/format';
-import { hapticLight, hapticSelection, hapticWarning } from '@/utils/haptics';
+import { hapticLight, hapticSelection, hapticSuccess, hapticWarning } from '@/utils/haptics';
 
 const AUTOSAVE_DELAY = 400;
+
+/** Short type label for a file chip, e.g. "pdf". */
+function extensionLabel(name?: string | null, mimeType?: string | null): string | null {
+  const fromName = name?.split('.').pop()?.toLowerCase();
+  if (fromName && fromName.length <= 5 && /^[a-z0-9]+$/.test(fromName)) return fromName;
+  const fromMime = mimeType?.split('/').pop()?.toLowerCase();
+  if (fromMime && fromMime.length <= 5 && /^[a-z0-9]+$/.test(fromMime)) return fromMime;
+  return null;
+}
+
+/** Human-readable byte size, e.g. "1.4 MB". */
+function formatBytes(size?: number | null): string | null {
+  if (!size || size <= 0) return null;
+  const units = ['B', 'KB', 'MB', 'GB'];
+  let n = size;
+  let i = 0;
+  while (n >= 1024 && i < units.length - 1) {
+    n /= 1024;
+    i += 1;
+  }
+  return `${n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)} ${units[i]}`;
+}
 
 export default function NoteEditorScreen() {
   const theme = useTheme();
@@ -62,6 +91,9 @@ export default function NoteEditorScreen() {
 
   const [blocks, setBlocks] = useState<ContentBlock[]>([]);
   const [attachments, setAttachments] = useState<Record<string, Attachment>>({});
+  const [viewerUri, setViewerUri] = useState<string | null>(null);
+  const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
+  const [mediaMenu, setMediaMenu] = useState<ContentBlock | null>(null);
   const initialized = useRef(false);
   const blocksRef = useRef<ContentBlock[]>([]);
   const inputs = useRef<Record<string, TextInput | null>>({});
@@ -69,6 +101,9 @@ export default function NoteEditorScreen() {
   const pendingFocus = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pinnedRef = useRef(false);
+  // True only after a real edit. Prevents merely opening a note from bumping
+  // its updatedAt (and triggering a needless sync push).
+  const dirtyRef = useRef(false);
 
   blocksRef.current = blocks;
 
@@ -123,7 +158,10 @@ export default function NoteEditorScreen() {
       await permanentlyDeleteNote(id);
       return;
     }
+    // Nothing was edited — don't rewrite the row (which would bump updatedAt).
+    if (!dirtyRef.current) return;
     await updateNote(id, { blocks: current, content, title: deriveTitle(content) });
+    dirtyRef.current = false;
   }, [id]);
 
   const scheduleSave = useCallback(() => {
@@ -136,6 +174,7 @@ export default function NoteEditorScreen() {
 
   const mutate = useCallback(
     (next: ContentBlock[]) => {
+      dirtyRef.current = true;
       setBlocks(next);
       blocksRef.current = next;
       scheduleSave();
@@ -167,6 +206,31 @@ export default function NoteEditorScreen() {
     const next = [...current.slice(0, index), block, ...current.slice(index)];
     if (isTextBlock(block)) pendingFocus.current = block.id;
     mutate(next);
+  };
+
+  /**
+   * Inserts a media (image/file) block and guarantees a text block after it so
+   * the user can keep typing below the attachment. Reuses an existing text
+   * block if one already follows; otherwise appends a fresh empty paragraph.
+   */
+  const insertMediaBlock = (block: ContentBlock) => {
+    const current = blocksRef.current;
+    const focusIndex = current.findIndex((b) => b.id === focusedId.current);
+    const index = focusIndex >= 0 ? focusIndex + 1 : current.length;
+    const following = current[index];
+    let next: ContentBlock[];
+    let focusId: string;
+    if (following && isTextBlock(following)) {
+      next = [...current.slice(0, index), block, ...current.slice(index)];
+      focusId = following.id;
+    } else {
+      const trailing = createBlock('paragraph');
+      next = [...current.slice(0, index), block, trailing, ...current.slice(index)];
+      focusId = trailing.id;
+    }
+    pendingFocus.current = focusId;
+    mutate(next);
+    requestAnimationFrame(() => inputs.current[focusId]?.focus());
   };
 
   /** Toolbar list/heading action: convert an empty focused paragraph, else insert. */
@@ -233,6 +297,81 @@ export default function NoteEditorScreen() {
 
   // --- Attachments ---------------------------------------------------------
 
+  // --- Attachment viewing --------------------------------------------------
+
+  // Marks an attachment as "pulling" for the duration of an async op so the
+  // block can show a loader/skeleton (e.g. while downloading the cloud copy).
+  const withDownloading = async (attId: string, fn: () => Promise<void>) => {
+    setDownloadingIds((prev) => new Set(prev).add(attId));
+    try {
+      await fn();
+    } finally {
+      setDownloadingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(attId);
+        return next;
+      });
+    }
+  };
+
+  const openMedia = (block: ContentBlock) => {
+    if (block.type !== 'image' && block.type !== 'file') return;
+    const att = attachments[block.attachmentId];
+    if (!att) return;
+    if (block.type === 'image') {
+      const uri = att.localUri ?? resolvePublicUrl(att.remoteUrl);
+      if (uri) setViewerUri(uri);
+      return;
+    }
+    void openFile(att);
+  };
+
+  const openFile = async (att: Attachment) => {
+    // Open the LOCAL file in a viewer app (ACTION_VIEW). Works offline; if the
+    // device only has the cloud copy it is downloaded first.
+    try {
+      await withDownloading(att.id, () => openAttachmentExternally(att));
+    } catch (e) {
+      Alert.alert('Cannot open file', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  // Long-press an attachment → open the Share / Download / Remove sheet.
+  const showMediaActions = (block: ContentBlock) => {
+    if (block.type !== 'image' && block.type !== 'file') return;
+    if (!attachments[block.attachmentId]) return;
+    hapticSelection();
+    setMediaMenu(block);
+  };
+
+  const mediaMenuActions = (): SheetAction[] => {
+    if (!mediaMenu || (mediaMenu.type !== 'image' && mediaMenu.type !== 'file')) return [];
+    const block = mediaMenu;
+    const att = attachments[block.attachmentId];
+    if (!att) return [];
+    return [
+      {
+        label: 'Share',
+        icon: 'share',
+        onPress: () =>
+          void withDownloading(att.id, () => shareAttachment(att)).catch((e) =>
+            Alert.alert('Cannot share', e instanceof Error ? e.message : String(e)),
+          ),
+      },
+      {
+        label: 'Download',
+        icon: 'download',
+        onPress: () =>
+          void withDownloading(att.id, () => saveAttachmentToDevice(att))
+            .then(() => hapticSuccess())
+            .catch((e) =>
+              Alert.alert('Download failed', e instanceof Error ? e.message : String(e)),
+            ),
+      },
+      { label: 'Remove', icon: 'trash', destructive: true, onPress: () => removeMediaBlock(block) },
+    ];
+  };
+
   const addAttachment = async (kind: 'library' | 'camera' | 'file') => {
     if (!id) return;
     try {
@@ -244,7 +383,7 @@ export default function NoteEditorScreen() {
             : await pickDocument(id);
       if (!attachment) return;
       const blockType: BlockType = attachment.type === 'image' ? 'image' : 'file';
-      insertAfterFocused(createBlock(blockType, attachment.id));
+      insertMediaBlock(createBlock(blockType, attachment.id));
     } catch (e) {
       console.log('[attach] addAttachment failed:', e);
       Alert.alert('Attachment failed', e instanceof Error ? e.message : String(e));
@@ -318,40 +457,44 @@ export default function NoteEditorScreen() {
 
   return (
     <ThemedView style={styles.container}>
-      <KeyboardAvoidingView
+      <KeyboardAwareScrollView
         style={styles.flex}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        keyboardVerticalOffset={90}>
-        <ScrollView
-          style={styles.flex}
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-          keyboardDismissMode="interactive">
-          {blocks.map((block) => (
-            <BlockView
-              key={block.id}
-              block={block}
-              attachment={
-                block.type === 'image' || block.type === 'file'
-                  ? attachments[block.attachmentId]
-                  : undefined
-              }
-              theme={theme}
-              registerRef={(ref) => {
-                inputs.current[block.id] = ref;
-              }}
-              onFocus={() => {
-                focusedId.current = block.id;
-              }}
-              onChangeText={(text) => setText(block.id, text)}
-              onSubmit={() => handleReturn(block.id)}
-              onKeyPress={(e) => handleBackspace(block.id, e)}
-              onToggle={() => toggleCheck(block.id)}
-              onRemoveMedia={() => removeMediaBlock(block)}
-            />
-          ))}
-        </ScrollView>
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="interactive"
+        // Keep the caret this far above the keyboard (clears the sticky toolbar).
+        bottomOffset={62}>
+        {blocks.map((block) => (
+          <BlockView
+            key={block.id}
+            block={block}
+            attachment={
+              block.type === 'image' || block.type === 'file'
+                ? attachments[block.attachmentId]
+                : undefined
+            }
+            downloading={
+              (block.type === 'image' || block.type === 'file') &&
+              downloadingIds.has(block.attachmentId)
+            }
+            theme={theme}
+            registerRef={(ref) => {
+              inputs.current[block.id] = ref;
+            }}
+            onFocus={() => {
+              focusedId.current = block.id;
+            }}
+            onChangeText={(text) => setText(block.id, text)}
+            onSubmit={() => handleReturn(block.id)}
+            onKeyPress={(e) => handleBackspace(block.id, e)}
+            onToggle={() => toggleCheck(block.id)}
+            onLongPressMedia={() => showMediaActions(block)}
+            onOpenMedia={() => openMedia(block)}
+          />
+        ))}
+      </KeyboardAwareScrollView>
 
+      <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
         <GlassSurface style={styles.toolbar}>
           <ToolbarButton icon="checkbox" label="Checklist" onPress={() => addTextBlock('checklist')} theme={theme} />
           <ToolbarButton icon="heading" label="Heading" onPress={() => addTextBlock('heading')} theme={theme} />
@@ -361,7 +504,24 @@ export default function NoteEditorScreen() {
           <ToolbarButton icon="attach" label="File" onPress={() => addAttachment('file')} theme={theme} />
         </GlassSurface>
         <View style={{ height: insets.bottom }} />
-      </KeyboardAvoidingView>
+      </KeyboardStickyView>
+
+      <ImageViewerModal
+        visible={viewerUri !== null}
+        uri={viewerUri}
+        onClose={() => setViewerUri(null)}
+      />
+
+      <ActionSheet
+        visible={mediaMenu !== null}
+        title={
+          mediaMenu && (mediaMenu.type === 'image' || mediaMenu.type === 'file')
+            ? (attachments[mediaMenu.attachmentId]?.name ?? 'Attachment')
+            : undefined
+        }
+        actions={mediaMenuActions()}
+        onClose={() => setMediaMenu(null)}
+      />
     </ThemedView>
   );
 }
@@ -395,6 +555,7 @@ function ToolbarButton({
 function BlockView({
   block,
   attachment,
+  downloading,
   theme,
   registerRef,
   onFocus,
@@ -402,10 +563,12 @@ function BlockView({
   onSubmit,
   onKeyPress,
   onToggle,
-  onRemoveMedia,
+  onLongPressMedia,
+  onOpenMedia,
 }: {
   block: ContentBlock;
   attachment?: Attachment;
+  downloading: boolean;
   theme: ThemeColors;
   registerRef: (ref: TextInput | null) => void;
   onFocus: () => void;
@@ -413,26 +576,41 @@ function BlockView({
   onSubmit: () => void;
   onKeyPress: (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => void;
   onToggle: () => void;
-  onRemoveMedia: () => void;
+  onLongPressMedia: () => void;
+  onOpenMedia: () => void;
 }) {
+  const [imgLoaded, setImgLoaded] = useState(false);
+
   if (block.type === 'image') {
-    const uri = attachment?.localUri ?? resolvePublicUrl(attachment?.remoteUrl) ?? undefined;
+    const localUri = attachment?.localUri ?? undefined;
+    const uri = localUri ?? resolvePublicUrl(attachment?.remoteUrl) ?? undefined;
+    const isRemote = !localUri && !!uri;
     const ratio = attachment?.width && attachment?.height ? attachment.width / attachment.height : 4 / 3;
+    const showSkeleton = downloading || (isRemote && !imgLoaded);
     return (
-      <Pressable onLongPress={onRemoveMedia} style={styles.mediaWrap}>
+      <Pressable onPress={onOpenMedia} onLongPress={onLongPressMedia} style={styles.mediaWrap}>
         {uri ? (
-          <Image source={{ uri }} style={[styles.image, { aspectRatio: ratio }]} contentFit="cover" />
+          <Image
+            source={{ uri }}
+            style={[styles.image, { aspectRatio: ratio }]}
+            contentFit="cover"
+            onLoadStart={() => isRemote && setImgLoaded(false)}
+            onLoad={() => setImgLoaded(true)}
+          />
         ) : (
           <View style={[styles.image, styles.imageFallback, { backgroundColor: theme.backgroundElement }]}>
             <Icon name="image" size={28} color={theme.textSecondary} />
           </View>
         )}
-        {attachment?.uploadStatus === 'uploading' && (
+        {showSkeleton && (
+          <Skeleton style={[styles.image, styles.mediaSkeleton, { aspectRatio: ratio }]} />
+        )}
+        {(attachment?.uploadStatus === 'uploading' || downloading) && (
           <View style={styles.badge}>
             <ActivityIndicator size="small" color="#fff" />
           </View>
         )}
-        {attachment?.uploadStatus === 'failed' && (
+        {attachment?.uploadStatus === 'failed' && !downloading && (
           <View style={[styles.badge, { backgroundColor: theme.danger }]}>
             <Icon name="error" size={14} color="#fff" />
           </View>
@@ -442,14 +620,43 @@ function BlockView({
   }
 
   if (block.type === 'file') {
+    const uploading = attachment?.uploadStatus === 'uploading';
+    const failed = attachment?.uploadStatus === 'failed';
+    const ext = extensionLabel(attachment?.name, attachment?.mimeType);
     return (
       <Pressable
-        onLongPress={onRemoveMedia}
-        style={[styles.fileChip, { backgroundColor: theme.backgroundElement }]}>
-        <Icon name="attach" size={18} color={theme.accent} />
-        <ThemedText type="small" numberOfLines={1} style={styles.fileName}>
-          {attachment?.name ?? 'Attachment'}
-        </ThemedText>
+        onPress={onOpenMedia}
+        onLongPress={onLongPressMedia}
+        style={({ pressed }) => [
+          styles.fileChip,
+          { backgroundColor: theme.backgroundElement, opacity: pressed ? 0.7 : 1 },
+        ]}>
+        <View style={[styles.fileIcon, { backgroundColor: theme.accent }]}>
+          {uploading || downloading ? (
+            <ActivityIndicator size="small" color="#fff" />
+          ) : (
+            <Icon name={failed ? 'error' : 'note'} size={18} color="#fff" />
+          )}
+          {ext && !uploading && !downloading ? (
+            <ThemedText type="small" style={styles.fileExtBadge}>
+              {ext}
+            </ThemedText>
+          ) : null}
+        </View>
+        <View style={styles.fileMeta}>
+          <ThemedText type="small" numberOfLines={1} style={styles.fileNameStrong}>
+            {attachment?.name ?? 'Attachment'}
+          </ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" numberOfLines={1}>
+            {downloading
+              ? 'Downloading…'
+              : failed
+                ? 'Upload failed'
+                : uploading
+                  ? 'Uploading…'
+                  : [ext?.toUpperCase(), formatBytes(attachment?.size)].filter(Boolean).join(' · ')}
+          </ThemedText>
+        </View>
       </Pressable>
     );
   }
@@ -514,6 +721,7 @@ const styles = StyleSheet.create({
   checkedText: { textDecorationLine: 'line-through' },
   mediaWrap: { marginVertical: Spacing.two },
   image: { width: '100%', borderRadius: 12, maxHeight: 360 },
+  mediaSkeleton: { position: 'absolute', top: 0, left: 0, right: 0 },
   imageFallback: { aspectRatio: 4 / 3, alignItems: 'center', justifyContent: 'center' },
   badge: {
     position: 'absolute',
@@ -529,12 +737,29 @@ const styles = StyleSheet.create({
   fileChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: Spacing.two,
+    gap: Spacing.three,
     padding: Spacing.three,
-    borderRadius: 10,
+    borderRadius: 12,
     marginVertical: Spacing.two,
   },
   fileName: { flex: 1 },
+  fileIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fileExtBadge: {
+    position: 'absolute',
+    bottom: 2,
+    color: '#fff',
+    fontSize: 8,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+  },
+  fileMeta: { flex: 1, gap: 2 },
+  fileNameStrong: { fontWeight: '600' },
   toolbar: {
     flexDirection: 'row',
     justifyContent: 'space-around',

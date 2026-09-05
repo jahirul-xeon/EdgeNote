@@ -11,6 +11,7 @@ import {
   ChevronRight,
   Cloud,
   CloudOff,
+  Download,
   Ellipsis,
   FileText,
   Folder,
@@ -27,6 +28,7 @@ import {
   RefreshCw,
   Search,
   Settings,
+  Share2,
   Square,
   SquarePen,
   Trash2,
@@ -68,6 +70,8 @@ const ICONS = {
   image: ImageIcon,
   camera: Camera,
   attach: Paperclip,
+  share: Share2,
+  download: Download,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;
