@@ -236,6 +236,19 @@ async function persistCopy(
     throw new Error("Attachment source URI is empty.");
   }
 
+  // Some picked items are bundles/packages — a DIRECTORY that presents as a
+  // single item (e.g. .rtfd, .pages, .key). File.copy can't copy a directory
+  // into a file path (it "completes" but writes nothing), so reject early with
+  // a clear message instead of a confusing "destination does not exist".
+  try {
+    if (new Directory(sourceUri).exists) {
+      throw new Error("This item is a folder/bundle and can't be attached.");
+    }
+  } catch (error) {
+    if (error instanceof Error && error.message.includes("bundle")) throw error;
+    // Directory probe failed for another reason — fall through to the copy.
+  }
+
   const directory = attachmentsDir();
 
   const destination = new File(directory, `${id}.${extension}`);

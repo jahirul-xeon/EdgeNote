@@ -33,13 +33,20 @@ export default function FoldersHomeScreen() {
 
   const handleImport = async () => {
     try {
-      const { count, firstNoteId } = await importNotes();
-      if (count === 0) return;
+      const { count, firstNoteId, skipped } = await importNotes();
+      const skipMsg =
+        skipped.length > 0
+          ? `\n\nCouldn't import ${skipped.length} item${skipped.length > 1 ? 's' : ''} (folders/bundles like .rtfd aren't supported): ${skipped.join(', ')}`
+          : '';
+      if (count === 0) {
+        if (skipped.length > 0) Alert.alert('Nothing imported', skipMsg.trim());
+        return;
+      }
       hapticSuccess();
-      if (count === 1 && firstNoteId) {
+      if (count === 1 && firstNoteId && skipped.length === 0) {
         router.push({ pathname: '/note/[id]', params: { id: firstNoteId } });
       } else {
-        Alert.alert('Imported', `${count} notes were imported.`);
+        Alert.alert('Imported', `${count} note${count > 1 ? 's' : ''} imported.${skipMsg}`);
       }
     } catch (e) {
       Alert.alert('Import failed', e instanceof Error ? e.message : String(e));

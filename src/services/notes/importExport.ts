@@ -17,7 +17,7 @@ import { Directory, File, Paths } from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 
 import { upsertAttachment } from '@/database/attachmentsRepository';
-import { createNote, updateNote } from '@/database/notesRepository';
+import { createNote, permanentlyDeleteNote, updateNote } from '@/database/notesRepository';
 import { saveImportedAttachment } from '@/services/attachments/attachmentService';
 import { resolvePublicUrl } from '@/services/edgeflare/storage';
 import type { Attachment } from '@/types/attachment';
@@ -173,7 +173,7 @@ export async function exportNote(
 
 // ── import ───────────────────────────────────────────────────────────
 
-export type ImportOutcome = { count: number; firstNoteId: string | null };
+export type ImportOutcome = { count: number; firstNoteId: string | null; skipped: string[] };
 
 type ExportedAttachment = {
   id: string;
@@ -272,17 +272,24 @@ async function importAsset(
     return [note.id];
   }
 
-  // 3) Image or 4) any other file → a note with the file attached.
+  // 3) Image or 4) any other file → a note with the file attached. Create the
+  // note only if the attachment persists, so a failure (e.g. an .rtfd bundle)
+  // doesn't leave an empty orphan note behind.
   const type = isImage(asset.name, asset.mimeType) ? 'image' : 'file';
   const note = await createNote({ title: baseTitle, folderId });
-  const attachment = await saveImportedAttachment(
-    note.id,
-    { uri: asset.uri, name: asset.name, mimeType: asset.mimeType, size: asset.size ?? null },
-    type,
-  );
-  const blocks: ContentBlock[] = [createBlock(type, attachment.id), createBlock('paragraph')];
-  await updateNote(note.id, { blocks, content: '', title: baseTitle });
-  return [note.id];
+  try {
+    const attachment = await saveImportedAttachment(
+      note.id,
+      { uri: asset.uri, name: asset.name, mimeType: asset.mimeType, size: asset.size ?? null },
+      type,
+    );
+    const blocks: ContentBlock[] = [createBlock(type, attachment.id), createBlock('paragraph')];
+    await updateNote(note.id, { blocks, content: '', title: baseTitle });
+    return [note.id];
+  } catch (e) {
+    await permanentlyDeleteNote(note.id);
+    throw e;
+  }
 }
 
 /** Opens the picker (any file type, multi-select) and imports each file. */
@@ -293,11 +300,12 @@ export async function importNotes(folderId: string | null = null): Promise<Impor
     type: '*/*',
   });
   if (result.canceled || result.assets.length === 0) {
-    return { count: 0, firstNoteId: null };
+    return { count: 0, firstNoteId: null, skipped: [] };
   }
 
   let firstNoteId: string | null = null;
   let count = 0;
+  const skipped: string[] = [];
   for (const asset of result.assets) {
     try {
       const ids = await importAsset(asset, folderId);
@@ -307,7 +315,8 @@ export async function importNotes(folderId: string | null = null): Promise<Impor
       }
     } catch (e) {
       console.warn('[import] failed for', asset.name, e);
+      skipped.push(asset.name ?? 'a file');
     }
   }
-  return { count, firstNoteId };
+  return { count, firstNoteId, skipped };
 }
