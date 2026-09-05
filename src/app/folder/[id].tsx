@@ -9,6 +9,7 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Icon } from '@/components/icon';
 import { NoteRow } from '@/components/notes/note-row';
 import { OfflineBanner } from '@/components/offline-banner';
+import { SearchInput } from '@/components/search-input';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -23,7 +24,7 @@ import {
 import { authenticate } from '@/services/security/biometrics';
 import { useFolderNotes } from '@/hooks/use-folder-notes';
 import { useTheme } from '@/hooks/use-theme';
-import { deriveTitle } from '@/utils/format';
+import { dateGroupLabel, deriveTitle } from '@/utils/format';
 import { hapticLight, hapticSelection, hapticWarning } from '@/utils/haptics';
 import type { Note } from '@/types/note';
 
@@ -40,6 +41,7 @@ export default function FolderNotesScreen() {
   const { notes, loading } = useFolderNotes(folderId);
   const [title, setTitle] = useState(folderId === ALL_NOTES_FOLDER ? 'All Notes' : 'Notes');
   const [isSmart, setIsSmart] = useState(false);
+  const [query, setQuery] = useState('');
 
   useEffect(() => {
     let active = true;
@@ -61,19 +63,35 @@ export default function FolderNotesScreen() {
   }, [navigation, title]);
 
   const data = useMemo<ListItem[]>(() => {
-    const pinned = notes.filter((n) => n.isPinned);
-    const others = notes.filter((n) => !n.isPinned);
+    const q = query.trim().toLowerCase();
+    // Locked notes hide their content, so exclude them from text search.
+    const filtered = q
+      ? notes.filter(
+          (n) => !n.isLocked && `${deriveTitle(n.content)}\n${n.content}`.toLowerCase().includes(q),
+        )
+      : notes;
+
+    const pinned = filtered.filter((n) => n.isPinned);
+    const others = filtered.filter((n) => !n.isPinned);
     const items: ListItem[] = [];
+
     if (pinned.length > 0) {
       items.push({ type: 'header', title: 'Pinned' });
       pinned.forEach((note) => items.push({ type: 'note', note }));
     }
-    if (others.length > 0) {
-      if (pinned.length > 0) items.push({ type: 'header', title: 'Notes' });
-      others.forEach((note) => items.push({ type: 'note', note }));
+
+    // Group the rest by day: Today, Yesterday, then the date.
+    let lastLabel = '';
+    for (const note of others) {
+      const label = dateGroupLabel(note.updatedAt);
+      if (label !== lastLabel) {
+        items.push({ type: 'header', title: label });
+        lastLabel = label;
+      }
+      items.push({ type: 'note', note });
     }
     return items;
-  }, [notes]);
+  }, [notes, query]);
 
   const openNote = (note: Note) => router.push({ pathname: '/note/[id]', params: { id: note.id } });
 
@@ -135,10 +153,15 @@ export default function FolderNotesScreen() {
   return (
     <ThemedView style={styles.container}>
       <OfflineBanner />
+      <View style={styles.searchWrap}>
+        <SearchInput value={query} onChangeText={setQuery} placeholder="Search notes" />
+      </View>
       <FlashList
         data={data}
         keyExtractor={(item) => (item.type === 'header' ? `h-${item.title}` : item.note.id)}
         getItemType={(item) => item.type}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
         contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
         renderItem={({ item, index }) =>
           item.type === 'header' ? (
@@ -157,7 +180,16 @@ export default function FolderNotesScreen() {
           )
         }
         ListEmptyComponent={
-          loading ? null : (
+          loading ? null : query.trim().length > 0 ? (
+            <View style={styles.empty}>
+              <ThemedText type="subtitle" style={styles.emptyText}>
+                No Matches
+              </ThemedText>
+              <ThemedText type="small" themeColor="textSecondary" style={styles.emptyText}>
+                No notes match “{query.trim()}”.
+              </ThemedText>
+            </View>
+          ) : (
             <View style={styles.empty}>
               <ThemedText type="subtitle" style={styles.emptyText}>
                 No Notes
@@ -205,6 +237,7 @@ export default function FolderNotesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
+  searchWrap: { paddingTop: Spacing.two, paddingBottom: Spacing.one },
   sectionHeader: {
     paddingHorizontal: Spacing.four,
     paddingTop: Spacing.three,

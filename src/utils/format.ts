@@ -61,3 +61,24 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
     year: '2-digit',
   });
 }
+
+/**
+ * Section label for grouping notes by day: "Today", "Yesterday", then the full
+ * date ("September 6, 2026").
+ */
+export function dateGroupLabel(timestamp: number, now: number = Date.now()): string {
+  const startOf = (t: number) => {
+    const d = new Date(t);
+    d.setHours(0, 0, 0, 0);
+    return d.getTime();
+  };
+  const today = startOf(now);
+  const day = startOf(timestamp);
+  if (day === today) return 'Today';
+  if (day === today - DAY) return 'Yesterday';
+  return new Date(timestamp).toLocaleDateString(undefined, {
+    month: 'long',
+    day: 'numeric',
+    year: 'numeric',
+  });
+}
