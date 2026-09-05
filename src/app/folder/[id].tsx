@@ -9,7 +9,6 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Icon } from '@/components/icon';
 import { NoteRow } from '@/components/notes/note-row';
 import { OfflineBanner } from '@/components/offline-banner';
-import { SearchInput } from '@/components/search-input';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
@@ -59,7 +58,17 @@ export default function FolderNotesScreen() {
   }, [folderId]);
 
   useLayoutEffect(() => {
-    navigation.setOptions({ title });
+    navigation.setOptions({
+      title,
+      headerLargeTitle: true,
+      headerLargeTitleShadowVisible: false,
+      headerSearchBarOptions: {
+        placeholder: 'Search notes',
+        hideWhenScrolling: false,
+        onChangeText: (e: { nativeEvent: { text: string } }) => setQuery(e.nativeEvent.text),
+        onClose: () => setQuery(''),
+      },
+    });
   }, [navigation, title]);
 
   const data = useMemo<ListItem[]>(() => {
@@ -153,15 +162,13 @@ export default function FolderNotesScreen() {
   return (
     <ThemedView style={styles.container}>
       <OfflineBanner />
-      <View style={styles.searchWrap}>
-        <SearchInput value={query} onChangeText={setQuery} placeholder="Search notes" />
-      </View>
       <FlashList
         data={data}
         keyExtractor={(item) => (item.type === 'header' ? `h-${item.title}` : item.note.id)}
         getItemType={(item) => item.type}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
+        contentInsetAdjustmentBehavior="automatic"
         contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
         renderItem={({ item, index }) =>
           item.type === 'header' ? (
@@ -235,7 +242,6 @@ export default function FolderNotesScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  searchWrap: { paddingTop: Spacing.two, paddingBottom: Spacing.one },
   sectionHeader: {
     fontSize: 20,
     lineHeight: 26,
