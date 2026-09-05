@@ -1,7 +1,6 @@
-import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { Pressable, StyleSheet, View } from 'react-native';
+import { FlatList, Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -64,7 +63,9 @@ export default function FolderNotesScreen() {
       headerLargeTitleShadowVisible: false,
       headerSearchBarOptions: {
         placeholder: 'Search notes',
-        hideWhenScrolling: false,
+        // Search + large title tuck into the nav bar on scroll; the small
+        // title shows in the header (standard iOS large-title behavior).
+        hideWhenScrolling: true,
         onChangeText: (e: { nativeEvent: { text: string } }) => setQuery(e.nativeEvent.text),
         onClose: () => setQuery(''),
       },
@@ -162,14 +163,14 @@ export default function FolderNotesScreen() {
   return (
     <ThemedView style={styles.container}>
       <OfflineBanner />
-      <FlashList
+      <FlatList
         data={data}
         keyExtractor={(item) => (item.type === 'header' ? `h-${item.title}` : item.note.id)}
-        getItemType={(item) => item.type}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         contentInsetAdjustmentBehavior="automatic"
-        contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
+        removeClippedSubviews={false}
+        contentContainerStyle={{ paddingBottom: insets.bottom + 96 }}
         renderItem={({ item, index }) =>
           item.type === 'header' ? (
             <ThemedText style={styles.sectionHeader}>{item.title}</ThemedText>
@@ -248,7 +249,7 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     paddingLeft: Spacing.three + Spacing.two,
     paddingRight: Spacing.four,
-    paddingTop: Spacing.four,
+    paddingTop: Spacing.three,
     paddingBottom: Spacing.two,
   },
   empty: { alignItems: 'center', justifyContent: 'center', paddingTop: Spacing.six, gap: Spacing.two },
