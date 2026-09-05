@@ -37,10 +37,14 @@ export const apiUrl = host ? `${host}/api` : '';
 export const iamUrl = host ? `${host}/iam` : '';
 
 // ── S3 (attachments) ────────────────────────────────────────────────
+// Mirrors edgeforce-ng environment.ts / s3-image.directive.ts:
+//   upload : {s3ApiUrl}/buckets/{bucket}/objects/{key}   (PUT, bearer token)
+//   read   : {s3Endpoint}/{s3Tenant}:{bucket}/{key}      (anonymous)
 export const s3ApiUrl = host ? `${host}/s3/v1` : '';
 export const s3Endpoint =
   process.env.EXPO_PUBLIC_EDGEFLARE_S3_ENDPOINT ?? 'https://s3.eu-west1.edgeflare.dev';
-export const s3Bucket = process.env.EXPO_PUBLIC_EDGEFLARE_S3_BUCKET ?? 'notes';
+/** Anon-readable bucket (edgeflare provisions one named `public` per tenant). */
+export const s3PublicBucket = process.env.EXPO_PUBLIC_EDGEFLARE_S3_BUCKET ?? 'public';
 export const s3Tenant = tenant;
 
 /** True once a tenant/host is configured; gates the whole cloud layer. */

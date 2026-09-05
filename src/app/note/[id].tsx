@@ -45,6 +45,7 @@ import {
 import type { Attachment } from '@/types/attachment';
 import type { BlockType, ContentBlock } from '@/types/blocks';
 import { isTextBlock } from '@/types/blocks';
+import { resolvePublicUrl } from '@/services/edgeflare/storage';
 import { blocksToPlainText, createBlock, parseBlocks } from '@/utils/blocks';
 import { deriveTitle } from '@/utils/format';
 import { hapticLight, hapticSelection, hapticWarning } from '@/utils/haptics';
@@ -234,15 +235,20 @@ export default function NoteEditorScreen() {
 
   const addAttachment = async (kind: 'library' | 'camera' | 'file') => {
     if (!id) return;
-    const attachment =
-      kind === 'library'
-        ? await pickImageFromLibrary(id)
-        : kind === 'camera'
-          ? await takePhoto(id)
-          : await pickDocument(id);
-    if (!attachment) return;
-    const blockType: BlockType = attachment.type === 'image' ? 'image' : 'file';
-    insertAfterFocused(createBlock(blockType, attachment.id));
+    try {
+      const attachment =
+        kind === 'library'
+          ? await pickImageFromLibrary(id)
+          : kind === 'camera'
+            ? await takePhoto(id)
+            : await pickDocument(id);
+      if (!attachment) return;
+      const blockType: BlockType = attachment.type === 'image' ? 'image' : 'file';
+      insertAfterFocused(createBlock(blockType, attachment.id));
+    } catch (e) {
+      console.log('[attach] addAttachment failed:', e);
+      Alert.alert('Attachment failed', e instanceof Error ? e.message : String(e));
+    }
   };
 
   // --- Lifecycle -----------------------------------------------------------
@@ -410,7 +416,7 @@ function BlockView({
   onRemoveMedia: () => void;
 }) {
   if (block.type === 'image') {
-    const uri = attachment?.localUri ?? attachment?.remoteUrl ?? undefined;
+    const uri = attachment?.localUri ?? resolvePublicUrl(attachment?.remoteUrl) ?? undefined;
     const ratio = attachment?.width && attachment?.height ? attachment.width / attachment.height : 4 / 3;
     return (
       <Pressable onLongPress={onRemoveMedia} style={styles.mediaWrap}>
