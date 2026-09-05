@@ -1,3 +1,10 @@
+import {
+  RecordingPresets,
+  requestRecordingPermissionsAsync,
+  setAudioModeAsync,
+  useAudioRecorder,
+  useAudioRecorderState,
+} from 'expo-audio';
 import { Image } from 'expo-image';
 import {
   useFocusEffect,
@@ -25,6 +32,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { GlassSurface } from '@/components/glass/glass-surface';
 import { Icon } from '@/components/icon';
+import { AudioPlayer } from '@/components/audio-player';
 import { ImageViewerModal } from '@/components/media-viewer';
 import { Skeleton } from '@/components/skeleton';
 import { ThemedText } from '@/components/themed-text';
@@ -35,9 +43,11 @@ import { deleteAttachment, getAttachmentsByNote } from '@/database/attachmentsRe
 import {
   deleteNote,
   permanentlyDeleteNote,
+  setLocked,
   setPinned,
   updateNote,
 } from '@/database/notesRepository';
+import { authenticate } from '@/services/security/biometrics';
 import { useNote } from '@/hooks/use-note';
 import { useTheme } from '@/hooks/use-theme';
 import {
@@ -46,9 +56,11 @@ import {
   pickDocument,
   pickImageFromLibrary,
   saveAttachmentToDevice,
+  saveImportedAttachment,
   shareAttachment,
   takePhoto,
 } from '@/services/attachments/attachmentService';
+import { exportNote, type ExportFormat } from '@/services/notes/importExport';
 import type { Attachment } from '@/types/attachment';
 import type { BlockType, ContentBlock } from '@/types/blocks';
 import { isTextBlock } from '@/types/blocks';
@@ -66,6 +78,12 @@ function extensionLabel(name?: string | null, mimeType?: string | null): string 
   const fromMime = mimeType?.split('/').pop()?.toLowerCase();
   if (fromMime && fromMime.length <= 5 && /^[a-z0-9]+$/.test(fromMime)) return fromMime;
   return null;
+}
+
+/** Millisecond duration as m:ss. */
+function formatDuration(ms: number): string {
+  const s = Math.floor((ms || 0) / 1000);
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
 /** Human-readable byte size, e.g. "1.4 MB". */
@@ -94,6 +112,14 @@ export default function NoteEditorScreen() {
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [mediaMenu, setMediaMenu] = useState<ContentBlock | null>(null);
+  const [noteMenu, setNoteMenu] = useState(false);
+  const [exportMenu, setExportMenu] = useState(false);
+  const [unlocked, setUnlocked] = useState(false);
+  const unlockedRef = useRef(false);
+  const lockedRef = useRef(false);
+  const audioRecorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
+  const recorderState = useAudioRecorderState(audioRecorder);
+  const [recording, setRecording] = useState(false);
   const initialized = useRef(false);
   const blocksRef = useRef<ContentBlock[]>([]);
   const inputs = useRef<Record<string, TextInput | null>>({});
@@ -107,9 +133,10 @@ export default function NoteEditorScreen() {
 
   blocksRef.current = blocks;
 
-  // Seed blocks from the note once loaded; focus a fresh empty note.
+  // Seed blocks from the note once loaded — but never load a locked note's
+  // content into memory until it has been unlocked this session.
   useEffect(() => {
-    if (note && !initialized.current) {
+    if (note && !initialized.current && (!note.isLocked || unlocked)) {
       initialized.current = true;
       const initial = parseBlocks(note.blocksJson, note.content);
       setBlocks(initial);
@@ -118,7 +145,23 @@ export default function NoteEditorScreen() {
         pendingFocus.current = initial[0].id;
       }
     }
-  }, [note]);
+  }, [note, unlocked]);
+
+  // Gate a locked note behind device auth; keep a ref mirror for persist().
+  lockedRef.current = (note?.isLocked ?? false) && !unlocked;
+  const tryUnlock = useCallback(async () => {
+    const ok = await authenticate('Unlock this note');
+    if (ok) {
+      unlockedRef.current = true;
+      setUnlocked(true);
+    }
+    return ok;
+  }, []);
+  useEffect(() => {
+    if (note?.isLocked && !unlockedRef.current) {
+      void tryUnlock();
+    }
+  }, [note?.id, note?.isLocked, tryUnlock]);
 
   // Keep attachment metadata fresh (upload status, remote URLs).
   useEffect(() => {
@@ -151,6 +194,9 @@ export default function NoteEditorScreen() {
 
   const persist = useCallback(async () => {
     if (!id || !initialized.current) return;
+    // A locked note that hasn't been unlocked has no loaded content — never
+    // write (or empty-delete) it.
+    if (lockedRef.current) return;
     const current = blocksRef.current;
     const content = blocksToPlainText(current);
     const hasMedia = current.some((b) => b.type === 'image' || b.type === 'file');
@@ -390,6 +436,53 @@ export default function NoteEditorScreen() {
     }
   };
 
+  // --- Audio notes ---------------------------------------------------------
+
+  const startRecording = async () => {
+    try {
+      const perm = await requestRecordingPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert('Microphone needed', 'Allow microphone access to record audio notes.');
+        return;
+      }
+      await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true });
+      await audioRecorder.prepareToRecordAsync();
+      audioRecorder.record();
+      hapticLight();
+      setRecording(true);
+    } catch (e) {
+      Alert.alert('Recording failed', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const stopRecording = async () => {
+    setRecording(false);
+    try {
+      await audioRecorder.stop();
+      const uri = audioRecorder.uri;
+      if (!uri || !id) return;
+      const stamp = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const attachment = await saveImportedAttachment(
+        id,
+        { uri, name: `Audio note ${stamp}`, mimeType: 'audio/m4a' },
+        'audio',
+      );
+      insertMediaBlock(createBlock('file', attachment.id));
+    } catch (e) {
+      Alert.alert('Recording failed', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const cancelRecording = async () => {
+    setRecording(false);
+    try {
+      await audioRecorder.stop();
+    } catch {
+      // ignore
+    }
+    if (audioRecorder.uri) deleteLocalFile(audioRecorder.uri);
+  };
+
   // --- Lifecycle -----------------------------------------------------------
 
   useFocusEffect(
@@ -406,9 +499,16 @@ export default function NoteEditorScreen() {
 
   const handleActions = useCallback(() => {
     if (!id) return;
-    Alert.alert('Note', undefined, [
+    hapticSelection();
+    setNoteMenu(true);
+  }, [id]);
+
+  const noteMenuActions = (): SheetAction[] => {
+    if (!id) return [];
+    return [
       {
-        text: pinnedRef.current ? 'Unpin' : 'Pin',
+        label: pinnedRef.current ? 'Unpin' : 'Pin',
+        icon: 'pin',
         onPress: () => {
           pinnedRef.current = !pinnedRef.current;
           hapticLight();
@@ -416,15 +516,36 @@ export default function NoteEditorScreen() {
         },
       },
       {
-        text: 'Move to Folder…',
+        label: 'Move to Folder…',
+        icon: 'folder-input',
         onPress: () => {
           void persist();
           router.push({ pathname: '/move/[id]', params: { id } });
         },
       },
       {
-        text: 'Delete',
-        style: 'destructive',
+        label: note?.isLocked ? 'Remove Lock' : 'Lock Note',
+        icon: note?.isLocked ? 'lock-open' : 'lock',
+        onPress: () => {
+          if (note?.isLocked) {
+            void authenticate('Remove lock from this note').then((ok) => {
+              if (ok) void setLocked(id, false);
+            });
+          } else {
+            hapticLight();
+            void setLocked(id, true);
+          }
+        },
+      },
+      {
+        label: 'Export…',
+        icon: 'share',
+        onPress: () => setExportMenu(true),
+      },
+      {
+        label: 'Delete',
+        icon: 'trash',
+        destructive: true,
         onPress: () => {
           if (saveTimer.current) clearTimeout(saveTimer.current);
           initialized.current = false;
@@ -433,9 +554,24 @@ export default function NoteEditorScreen() {
           router.back();
         },
       },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
-  }, [id, router, persist]);
+    ];
+  };
+
+  const doExport = async (format: ExportFormat) => {
+    if (!note) return;
+    try {
+      await persist();
+      await exportNote(note, blocksRef.current, Object.values(attachments), format);
+    } catch (e) {
+      Alert.alert('Export failed', e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const exportMenuActions = (): SheetAction[] => [
+    { label: 'Markdown (.md)', icon: 'note', onPress: () => void doExport('markdown') },
+    { label: 'Plain text (.txt)', icon: 'note', onPress: () => void doExport('text') },
+    { label: 'JSON backup (.json)', icon: 'download', onPress: () => void doExport('json') },
+  ];
 
   useLayoutEffect(() => {
     navigation.setOptions({
@@ -451,6 +587,29 @@ export default function NoteEditorScreen() {
     return (
       <ThemedView style={styles.center}>
         <ActivityIndicator color={theme.textSecondary} />
+      </ThemedView>
+    );
+  }
+
+  if (note?.isLocked && !unlocked) {
+    return (
+      <ThemedView style={styles.center}>
+        <View style={styles.lockedWrap}>
+          <Icon name="lock" size={40} color={theme.textSecondary} />
+          <ThemedText type="subtitle">Locked Note</ThemedText>
+          <ThemedText type="small" themeColor="textSecondary" style={styles.lockedHint}>
+            Authenticate to view this note.
+          </ThemedText>
+          <Pressable
+            onPress={tryUnlock}
+            style={({ pressed }) => [
+              styles.unlockBtn,
+              { backgroundColor: theme.accent, opacity: pressed ? 0.85 : 1 },
+            ]}>
+            <Icon name="lock-open" size={18} color={theme.accentContrast} />
+            <ThemedText style={{ color: theme.accentContrast, fontWeight: '600' }}>Unlock</ThemedText>
+          </Pressable>
+        </View>
       </ThemedView>
     );
   }
@@ -495,14 +654,36 @@ export default function NoteEditorScreen() {
       </KeyboardAwareScrollView>
 
       <KeyboardStickyView offset={{ closed: 0, opened: insets.bottom }}>
-        <GlassSurface style={styles.toolbar}>
-          <ToolbarButton icon="checkbox" label="Checklist" onPress={() => addTextBlock('checklist')} theme={theme} />
-          <ToolbarButton icon="heading" label="Heading" onPress={() => addTextBlock('heading')} theme={theme} />
-          <ToolbarButton icon="bullet-list" label="List" onPress={() => addTextBlock('bullet')} theme={theme} />
-          <ToolbarButton icon="image" label="Photo" onPress={() => addAttachment('library')} theme={theme} />
-          <ToolbarButton icon="camera" label="Camera" onPress={() => addAttachment('camera')} theme={theme} />
-          <ToolbarButton icon="attach" label="File" onPress={() => addAttachment('file')} theme={theme} />
-        </GlassSurface>
+        {recording ? (
+          <GlassSurface style={styles.toolbar}>
+            <View style={styles.recordingBar}>
+              <View style={[styles.recDot, { backgroundColor: theme.danger }]} />
+              <ThemedText type="default" style={styles.recTime}>
+                Recording · {formatDuration(recorderState.durationMillis)}
+              </ThemedText>
+              <Pressable onPress={cancelRecording} hitSlop={8} style={styles.recAction}>
+                <ThemedText type="default" style={{ color: theme.textSecondary }}>
+                  Cancel
+                </ThemedText>
+              </Pressable>
+              <Pressable onPress={stopRecording} hitSlop={8} style={styles.recAction}>
+                <ThemedText type="default" style={{ color: theme.accent, fontWeight: '600' }}>
+                  Stop
+                </ThemedText>
+              </Pressable>
+            </View>
+          </GlassSurface>
+        ) : (
+          <GlassSurface style={styles.toolbar}>
+            <ToolbarButton icon="checkbox" label="Checklist" onPress={() => addTextBlock('checklist')} theme={theme} />
+            <ToolbarButton icon="heading" label="Heading" onPress={() => addTextBlock('heading')} theme={theme} />
+            <ToolbarButton icon="bullet-list" label="List" onPress={() => addTextBlock('bullet')} theme={theme} />
+            <ToolbarButton icon="image" label="Photo" onPress={() => addAttachment('library')} theme={theme} />
+            <ToolbarButton icon="camera" label="Camera" onPress={() => addAttachment('camera')} theme={theme} />
+            <ToolbarButton icon="attach" label="File" onPress={() => addAttachment('file')} theme={theme} />
+            <ToolbarButton icon="mic" label="Audio" onPress={startRecording} theme={theme} />
+          </GlassSurface>
+        )}
         <View style={{ height: insets.bottom }} />
       </KeyboardStickyView>
 
@@ -521,6 +702,19 @@ export default function NoteEditorScreen() {
         }
         actions={mediaMenuActions()}
         onClose={() => setMediaMenu(null)}
+      />
+
+      <ActionSheet
+        visible={noteMenu}
+        actions={noteMenuActions()}
+        onClose={() => setNoteMenu(false)}
+      />
+
+      <ActionSheet
+        visible={exportMenu}
+        title="Export as"
+        actions={exportMenuActions()}
+        onClose={() => setExportMenu(false)}
       />
     </ThemedView>
   );
@@ -620,6 +814,15 @@ function BlockView({
   }
 
   if (block.type === 'file') {
+    // Audio attachments render an inline player instead of a file chip.
+    if (attachment?.type === 'audio') {
+      const audioUri = attachment.localUri ?? resolvePublicUrl(attachment.remoteUrl);
+      return (
+        <Pressable onLongPress={onLongPressMedia}>
+          <AudioPlayer uri={audioUri} name={attachment.name} />
+        </Pressable>
+      );
+    }
     const uploading = attachment?.uploadStatus === 'uploading';
     const failed = attachment?.uploadStatus === 'failed';
     const ext = extensionLabel(attachment?.name, attachment?.mimeType);
@@ -706,6 +909,17 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  lockedWrap: { alignItems: 'center', gap: Spacing.two, padding: Spacing.six },
+  lockedHint: { textAlign: 'center' },
+  unlockBtn: {
+    marginTop: Spacing.two,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: Spacing.two,
+    paddingVertical: Spacing.two,
+    paddingHorizontal: Spacing.four,
+    borderRadius: 999,
+  },
   scroll: { padding: Spacing.four, paddingBottom: Spacing.six, gap: Spacing.one },
   blockRow: { flexDirection: 'row', alignItems: 'flex-start' },
   checkbox: { paddingTop: 3, paddingRight: Spacing.two },
@@ -760,6 +974,10 @@ const styles = StyleSheet.create({
   },
   fileMeta: { flex: 1, gap: 2 },
   fileNameStrong: { fontWeight: '600' },
+  recordingBar: { flexDirection: 'row', alignItems: 'center', gap: Spacing.three, flex: 1, paddingHorizontal: Spacing.two },
+  recDot: { width: 12, height: 12, borderRadius: 6 },
+  recTime: { flex: 1 },
+  recAction: { paddingHorizontal: Spacing.two, paddingVertical: Spacing.one },
   toolbar: {
     flexDirection: 'row',
     justifyContent: 'space-around',

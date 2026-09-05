@@ -579,6 +579,28 @@ async function buildAttachment(
 }
 
 /* =========================================================
+   Import
+   ========================================================= */
+
+/**
+ * Persists an externally-provided file (e.g. from the note importer) as an
+ * attachment on a note. Same pipeline as the pickers: copy into app storage,
+ * then insert the row. The sync engine uploads it later.
+ */
+export async function saveImportedAttachment(
+  noteId: string,
+  asset: { uri: string; name?: string | null; mimeType?: string | null; size?: number | null },
+  type: AttachmentType,
+): Promise<Attachment> {
+  return buildAttachment(noteId, type, {
+    uri: asset.uri,
+    name: asset.name ?? null,
+    mimeType: asset.mimeType ?? null,
+    size: asset.size ?? null,
+  });
+}
+
+/* =========================================================
    Image Library
    ========================================================= */
 

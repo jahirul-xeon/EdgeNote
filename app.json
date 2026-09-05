@@ -44,7 +44,19 @@
           "cameraPermission": "Allow $(PRODUCT_NAME) to take photos to add to notes."
         }
       ],
-      "expo-sharing"
+      "expo-sharing",
+      [
+        "expo-audio",
+        {
+          "microphonePermission": "Allow $(PRODUCT_NAME) to record audio notes."
+        }
+      ],
+      [
+        "expo-local-authentication",
+        {
+          "faceIDPermission": "Unlock your locked notes with Face ID."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

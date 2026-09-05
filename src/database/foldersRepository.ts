@@ -6,9 +6,9 @@
  */
 import { emitChange } from '@/database/changeBus';
 import { getDatabase } from '@/database/database';
-import { getNoteCountsByFolder } from '@/database/notesRepository';
+import { countNotesForSmartRule, getNoteCountsByFolder } from '@/database/notesRepository';
 import { enqueue } from '@/database/syncRepository';
-import type { Folder, FolderWithCount } from '@/types/folder';
+import type { Folder, FolderWithCount, SmartRule } from '@/types/folder';
 import { createId } from '@/utils/id';
 
 const LOCAL_USER_ID = 'local-user';
@@ -22,7 +22,17 @@ type FolderRow = {
   created_at: number;
   updated_at: number;
   sync_status: string;
+  smart_rule: string | null;
 };
+
+function parseRule(raw: string | null): SmartRule | null {
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw) as SmartRule;
+  } catch {
+    return null;
+  }
+}
 
 function mapRow(row: FolderRow): Folder {
   return {
@@ -34,17 +44,28 @@ function mapRow(row: FolderRow): Folder {
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     syncStatus: row.sync_status,
+    smartRule: parseRule(row.smart_rule),
   };
 }
 
-/** All folders, alphabetical, each with its active-note count. */
+/** All folders, alphabetical, each with its active-note count (smart folders
+ *  count via their rule). */
 export async function getFolders(): Promise<FolderWithCount[]> {
   const db = await getDatabase();
   const [rows, counts] = await Promise.all([
     db.getAllAsync<FolderRow>('SELECT * FROM folders ORDER BY name COLLATE NOCASE ASC'),
     getNoteCountsByFolder(),
   ]);
-  return rows.map((row) => ({ ...mapRow(row), noteCount: counts[row.id] ?? 0 }));
+  const folders = rows.map(mapRow);
+  const withCounts = await Promise.all(
+    folders.map(async (folder) => ({
+      ...folder,
+      noteCount: folder.smartRule
+        ? await countNotesForSmartRule(folder.smartRule)
+        : (counts[folder.id] ?? 0),
+    })),
+  );
+  return withCounts;
 }
 
 export async function getFolder(id: string): Promise<Folder | null> {
@@ -65,6 +86,7 @@ export async function createFolder(name: string): Promise<Folder> {
     createdAt: now,
     updatedAt: now,
     syncStatus: 'pending',
+    smartRule: null,
   };
   await db.runAsync(
     `INSERT INTO folders (id, user_id, name, icon, color, created_at, updated_at, sync_status)
@@ -72,6 +94,33 @@ export async function createFolder(name: string): Promise<Folder> {
     [folder.id, folder.userId, folder.name, null, null, now, now],
   );
   await enqueue('folder', folder.id, 'create', { name: folder.name });
+  emitChange();
+  return folder;
+}
+
+/**
+ * Creates a smart folder — populated by a rule, not manual membership. These
+ * are local-only (not enqueued for sync); the rule lives in `smart_rule`.
+ */
+export async function createSmartFolder(name: string, rule: SmartRule): Promise<Folder> {
+  const db = await getDatabase();
+  const now = Date.now();
+  const folder: Folder = {
+    id: createId('folder'),
+    userId: LOCAL_USER_ID,
+    name: name.trim(),
+    icon: null,
+    color: null,
+    createdAt: now,
+    updatedAt: now,
+    syncStatus: 'synced',
+    smartRule: rule,
+  };
+  await db.runAsync(
+    `INSERT INTO folders (id, user_id, name, icon, color, created_at, updated_at, sync_status, smart_rule)
+     VALUES (?, ?, ?, ?, ?, ?, ?, 'synced', ?)`,
+    [folder.id, folder.userId, folder.name, null, null, now, now, JSON.stringify(rule)],
+  );
   emitChange();
   return folder;
 }

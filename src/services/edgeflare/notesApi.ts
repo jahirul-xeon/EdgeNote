@@ -234,5 +234,6 @@ async function fetchRemoteFolders(
     createdAt: num(row.created_at, Date.now()),
     updatedAt: num(row.updated_at, Date.now()),
     syncStatus: 'synced',
+    smartRule: null,
   }));
 }

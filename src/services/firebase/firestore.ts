@@ -171,6 +171,7 @@ export async function fetchRemoteFoldersSince(uid: string, since: number): Promi
       createdAt: Number(data.createdAt ?? Date.now()),
       updatedAt: Number(data.updatedAt ?? Date.now()),
       syncStatus: 'synced',
+      smartRule: null,
     };
   });
 }

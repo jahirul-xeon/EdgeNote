@@ -12,7 +12,7 @@ import * as SQLite from 'expo-sqlite';
 const DATABASE_NAME = 'notes.db';
 
 /** Current schema version. Bump and add a migration block below when changing schema. */
-const SCHEMA_VERSION = 5;
+const SCHEMA_VERSION = 6;
 
 let dbPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -115,6 +115,8 @@ async function migrate(db: SQLite.SQLiteDatabase): Promise<void> {
   // IF NOT EXISTS form, so each is guarded by an existence check.
   await ensureColumn(db, 'sync_queue', 'next_attempt_at', 'INTEGER NOT NULL DEFAULT 0');
   await ensureColumn(db, 'notes', 'blocks_json', 'TEXT');
+  // Smart folders: a JSON rule, local-only (not synced). NULL = a normal folder.
+  await ensureColumn(db, 'folders', 'smart_rule', 'TEXT');
 
   await db.execAsync(`PRAGMA user_version = ${SCHEMA_VERSION}`);
 }

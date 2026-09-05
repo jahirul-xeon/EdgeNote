@@ -14,6 +14,7 @@ import type * as SQLite from 'expo-sqlite';
 import { emitChange } from '@/database/changeBus';
 import { getDatabase } from '@/database/database';
 import { enqueue } from '@/database/syncRepository';
+import type { SmartRule } from '@/types/folder';
 import type { CreateNoteInput, Note, UpdateNotePatch } from '@/types/note';
 import { getDeviceId } from '@/utils/device';
 import { createId } from '@/utils/id';
@@ -113,6 +114,48 @@ export async function getNotesByFolder(folderId: string): Promise<Note[]> {
     folderId,
   );
   return rows.map(mapRow);
+}
+
+/** Builds the WHERE fragment (minus `is_deleted = 0`) for a smart-folder rule. */
+function smartRuleWhere(rule: SmartRule): { clause: string; params: (string | number)[] } {
+  switch (rule.type) {
+    case 'keyword': {
+      const like = `%${escapeLike(rule.value)}%`;
+      return {
+        clause: "(title LIKE ? ESCAPE '\\' OR content LIKE ? ESCAPE '\\')",
+        params: [like, like],
+      };
+    }
+    case 'has-attachment':
+      return { clause: 'id IN (SELECT DISTINCT note_id FROM attachments)', params: [] };
+    case 'recent':
+      return { clause: 'updated_at >= ?', params: [Date.now() - rule.days * 86_400_000] };
+    case 'pinned':
+      return { clause: 'is_pinned = 1', params: [] };
+  }
+}
+
+/** Active notes matching a smart-folder rule (same ordering as a folder view). */
+export async function getNotesForSmartRule(rule: SmartRule): Promise<Note[]> {
+  const db = await getDatabase();
+  const { clause, params } = smartRuleWhere(rule);
+  const rows = await db.getAllAsync<NoteRow>(
+    `SELECT * FROM notes WHERE is_deleted = 0 AND ${clause}
+     ORDER BY is_pinned DESC, updated_at DESC`,
+    params,
+  );
+  return rows.map(mapRow);
+}
+
+/** Count of active notes matching a smart-folder rule. */
+export async function countNotesForSmartRule(rule: SmartRule): Promise<number> {
+  const db = await getDatabase();
+  const { clause, params } = smartRuleWhere(rule);
+  const row = await db.getFirstAsync<{ c: number }>(
+    `SELECT COUNT(*) AS c FROM notes WHERE is_deleted = 0 AND ${clause}`,
+    params,
+  );
+  return row?.c ?? 0;
 }
 
 /** Full-text-ish search over active notes' title and content (offline, §17). */
@@ -345,6 +388,10 @@ export async function moveNote(id: string, folderId: string | null): Promise<voi
 
 export async function setPinned(id: string, isPinned: boolean): Promise<void> {
   await updateNote(id, { isPinned });
+}
+
+export async function setLocked(id: string, isLocked: boolean): Promise<void> {
+  await updateNote(id, { isLocked });
 }
 
 // --- Sync support ----------------------------------------------------------

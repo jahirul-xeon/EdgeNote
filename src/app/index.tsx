@@ -13,10 +13,11 @@ import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { deleteFolder } from '@/database/foldersRepository';
 import { ALL_NOTES_FOLDER, createNote } from '@/database/notesRepository';
+import { importNotes } from '@/services/notes/importExport';
 import { useFolders } from '@/hooks/use-folders';
 import { useTheme } from '@/hooks/use-theme';
 import type { FolderWithCount } from '@/types/folder';
-import { hapticLight, hapticWarning } from '@/utils/haptics';
+import { hapticLight, hapticSuccess, hapticWarning } from '@/utils/haptics';
 
 export default function FoldersHomeScreen() {
   const theme = useTheme();
@@ -28,6 +29,21 @@ export default function FoldersHomeScreen() {
     hapticLight();
     const note = await createNote();
     router.push({ pathname: '/note/[id]', params: { id: note.id } });
+  };
+
+  const handleImport = async () => {
+    try {
+      const { count, firstNoteId } = await importNotes();
+      if (count === 0) return;
+      hapticSuccess();
+      if (count === 1 && firstNoteId) {
+        router.push({ pathname: '/note/[id]', params: { id: firstNoteId } });
+      } else {
+        Alert.alert('Imported', `${count} notes were imported.`);
+      }
+    } catch (e) {
+      Alert.alert('Import failed', e instanceof Error ? e.message : String(e));
+    }
   };
 
   const handleFolderLongPress = (folder: FolderWithCount) => {
@@ -66,14 +82,24 @@ export default function FoldersHomeScreen() {
         ]}>
         <View style={styles.titleRow}>
           <ThemedText type="title">Folders</ThemedText>
-          <Pressable
-            onPress={() => router.push('/settings')}
-            accessibilityRole="button"
-            accessibilityLabel="Settings"
-            hitSlop={10}
-            style={({ pressed }) => [styles.gear, { opacity: pressed ? 0.5 : 1 }]}>
-            <Icon name="settings" size={24} color={theme.accent} />
-          </Pressable>
+          <View style={styles.headerActions}>
+            <Pressable
+              onPress={handleImport}
+              accessibilityRole="button"
+              accessibilityLabel="Import notes"
+              hitSlop={10}
+              style={({ pressed }) => [styles.gear, { opacity: pressed ? 0.5 : 1 }]}>
+              <Icon name="import" size={24} color={theme.accent} />
+            </Pressable>
+            <Pressable
+              onPress={() => router.push('/settings')}
+              accessibilityRole="button"
+              accessibilityLabel="Settings"
+              hitSlop={10}
+              style={({ pressed }) => [styles.gear, { opacity: pressed ? 0.5 : 1 }]}>
+              <Icon name="settings" size={24} color={theme.accent} />
+            </Pressable>
+          </View>
         </View>
 
         <SyncStatusLine />
@@ -101,7 +127,7 @@ export default function FoldersHomeScreen() {
                 <View key={folder.id}>
                   {index > 0 && <View style={[styles.divider, { backgroundColor: theme.separator }]} />}
                   <ListRow
-                    icon="folder"
+                    icon={folder.smartRule ? 'smart-folder' : 'folder'}
                     label={folder.name}
                     count={folder.noteCount}
                     onPress={() => router.push({ pathname: '/folder/[id]', params: { id: folder.id } })}
@@ -162,6 +188,7 @@ const styles = StyleSheet.create({
     paddingBottom: Spacing.two,
   },
   gear: { padding: Spacing.one },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.one },
   searchWrap: { marginTop: Spacing.two, marginBottom: Spacing.four },
   sectionHeader: {
     paddingHorizontal: Spacing.four,

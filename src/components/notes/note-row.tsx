@@ -18,9 +18,11 @@ type NoteRowProps = {
 
 function NoteRowComponent({ note, onPress, onLongPress, topDivider }: NoteRowProps) {
   const theme = useTheme();
-  const title = deriveTitle(note.content) || 'New Note';
-  const preview = derivePreview(note.content);
-  const hasTitle = deriveTitle(note.content).length > 0;
+  // Locked notes never reveal their content (title or preview) in the list.
+  const locked = note.isLocked;
+  const title = locked ? 'Locked Note' : deriveTitle(note.content) || 'New Note';
+  const preview = locked ? 'This note is locked' : derivePreview(note.content);
+  const hasTitle = locked || deriveTitle(note.content).length > 0;
 
   return (
     <Pressable
@@ -38,6 +40,11 @@ function NoteRowComponent({ note, onPress, onLongPress, topDivider }: NoteRowPro
         {note.isPinned && (
           <View style={styles.pin}>
             <Icon name="pin" size={13} color={theme.textSecondary} fill={theme.textSecondary} />
+          </View>
+        )}
+        {locked && (
+          <View style={styles.pin}>
+            <Icon name="lock" size={13} color={theme.textSecondary} />
           </View>
         )}
         <ThemedText

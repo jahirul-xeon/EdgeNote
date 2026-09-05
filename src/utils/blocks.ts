@@ -34,6 +34,44 @@ export function blocksFromPlainText(content: string): ContentBlock[] {
   return [{ id: createId('blk'), type: 'paragraph', text: content }];
 }
 
+/**
+ * Parses imported Markdown/plain text into blocks. Recognizes headings (`#`),
+ * bullets (`-`/`*`), and task lists (`- [ ]` / `- [x]`); everything else becomes
+ * a paragraph. Image/link syntax is kept as plain text (the referenced files
+ * aren't available on import).
+ */
+export function markdownToBlocks(text: string): ContentBlock[] {
+  const lines = text.replace(/\r\n/g, '\n').split('\n');
+  const blocks: ContentBlock[] = [];
+  for (const raw of lines) {
+    const line = raw.trimEnd();
+    const id = createId('blk');
+    const task = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      blocks.push({ id, type: 'checklist', text: task[2], checked: task[1].toLowerCase() === 'x' });
+      continue;
+    }
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+    if (heading) {
+      blocks.push({ id, type: 'heading', text: heading[1] });
+      continue;
+    }
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    if (bullet) {
+      blocks.push({ id, type: 'bullet', text: bullet[1] });
+      continue;
+    }
+    // Collapse runs of blank lines instead of emitting empty paragraphs.
+    if (line.trim().length === 0) {
+      if (blocks.length === 0 || blocks[blocks.length - 1].type !== 'paragraph') continue;
+      const last = blocks[blocks.length - 1];
+      if (last.type === 'paragraph' && last.text.length === 0) continue;
+    }
+    blocks.push({ id, type: 'paragraph', text: line.trim() });
+  }
+  return blocks.length > 0 ? blocks : [createBlock('paragraph')];
+}
+
 /** Parses stored blocks JSON, falling back to a plain-text seed. */
 export function parseBlocks(blocksJson: string | null, content: string): ContentBlock[] {
   if (blocksJson) {

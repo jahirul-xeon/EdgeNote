@@ -26,7 +26,7 @@ function RootNavigator() {
             options={{ title: '', headerBackTitle: 'Notes', headerShadowVisible: false }}
           />
           <Stack.Screen name="trash" options={{ headerBackTitle: 'Folders' }} />
-          <Stack.Screen name="settings" options={{ headerBackTitle: 'Folders' }} />
+          <Stack.Screen name="settings" options={{ title: 'Settings', headerBackTitle: 'Folders' }} />
           <Stack.Screen name="search" options={{ headerShown: false, presentation: 'modal' }} />
           <Stack.Screen name="move/[id]" options={{ headerShown: false, presentation: 'modal' }} />
           <Stack.Screen name="folder-edit" options={{ headerShown: false, presentation: 'modal' }} />

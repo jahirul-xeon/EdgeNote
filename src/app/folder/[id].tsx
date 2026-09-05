@@ -1,10 +1,11 @@
 import { FlashList } from '@shopify/flash-list';
 import { useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { useEffect, useLayoutEffect, useMemo, useState } from 'react';
-import { Alert, Pressable, StyleSheet, View } from 'react-native';
+import { Pressable, StyleSheet, View } from 'react-native';
 import Animated, { FadeIn, useReducedMotion } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
+import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { Icon } from '@/components/icon';
 import { NoteRow } from '@/components/notes/note-row';
 import { OfflineBanner } from '@/components/offline-banner';
@@ -12,11 +13,18 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { getFolder } from '@/database/foldersRepository';
-import { ALL_NOTES_FOLDER, createNote, deleteNote, setPinned } from '@/database/notesRepository';
+import {
+  ALL_NOTES_FOLDER,
+  createNote,
+  deleteNote,
+  setLocked,
+  setPinned,
+} from '@/database/notesRepository';
+import { authenticate } from '@/services/security/biometrics';
 import { useFolderNotes } from '@/hooks/use-folder-notes';
 import { useTheme } from '@/hooks/use-theme';
 import { deriveTitle } from '@/utils/format';
-import { hapticLight, hapticWarning } from '@/utils/haptics';
+import { hapticLight, hapticSelection, hapticWarning } from '@/utils/haptics';
 import type { Note } from '@/types/note';
 
 type ListItem = { type: 'header'; title: string } | { type: 'note'; note: Note };
@@ -31,12 +39,16 @@ export default function FolderNotesScreen() {
   const folderId = id ?? ALL_NOTES_FOLDER;
   const { notes, loading } = useFolderNotes(folderId);
   const [title, setTitle] = useState(folderId === ALL_NOTES_FOLDER ? 'All Notes' : 'Notes');
+  const [isSmart, setIsSmart] = useState(false);
 
   useEffect(() => {
     let active = true;
     if (folderId !== ALL_NOTES_FOLDER) {
       getFolder(folderId).then((folder) => {
-        if (active && folder) setTitle(folder.name);
+        if (active && folder) {
+          setTitle(folder.name);
+          setIsSmart(folder.smartRule !== null);
+        }
       });
     }
     return () => {
@@ -71,29 +83,53 @@ export default function FolderNotesScreen() {
     router.push({ pathname: '/note/[id]', params: { id: note.id } });
   };
 
+  const [menuNote, setMenuNote] = useState<Note | null>(null);
+
   const handleLongPress = (note: Note) => {
-    Alert.alert(deriveTitle(note.content) || 'New Note', undefined, [
+    hapticSelection();
+    setMenuNote(note);
+  };
+
+  const menuActions = (): SheetAction[] => {
+    const note = menuNote;
+    if (!note) return [];
+    return [
       {
-        text: note.isPinned ? 'Unpin' : 'Pin',
+        label: note.isPinned ? 'Unpin' : 'Pin',
+        icon: 'pin',
         onPress: () => {
           hapticLight();
           void setPinned(note.id, !note.isPinned);
         },
       },
       {
-        text: 'Move to Folder…',
+        label: note.isLocked ? 'Remove Lock' : 'Lock Note',
+        icon: note.isLocked ? 'lock-open' : 'lock',
+        onPress: () => {
+          if (note.isLocked) {
+            void authenticate('Remove lock from this note').then((ok) => {
+              if (ok) void setLocked(note.id, false);
+            });
+          } else {
+            void setLocked(note.id, true);
+          }
+        },
+      },
+      {
+        label: 'Move to Folder…',
+        icon: 'folder-input',
         onPress: () => router.push({ pathname: '/move/[id]', params: { id: note.id } }),
       },
       {
-        text: 'Delete',
-        style: 'destructive',
+        label: 'Delete',
+        icon: 'trash',
+        destructive: true,
         onPress: () => {
           hapticWarning();
           void deleteNote(note.id);
         },
       },
-      { text: 'Cancel', style: 'cancel' },
-    ]);
+    ];
   };
 
   return (
@@ -132,6 +168,7 @@ export default function FolderNotesScreen() {
         }
       />
 
+      {!isSmart && (
       <Animated.View
         entering={reduceMotion ? undefined : FadeIn.duration(250)}
         style={[styles.fabWrap, { bottom: insets.bottom + Spacing.four }]}>
@@ -150,6 +187,16 @@ export default function FolderNotesScreen() {
           <Icon name="compose" size={26} color={theme.accentContrast} />
         </Pressable>
       </Animated.View>
+      )}
+
+      <ActionSheet
+        visible={menuNote !== null}
+        title={
+          menuNote?.isLocked ? 'Locked Note' : deriveTitle(menuNote?.content ?? '') || 'New Note'
+        }
+        actions={menuActions()}
+        onClose={() => setMenuNote(null)}
+      />
     </ThemedView>
   );
 }
