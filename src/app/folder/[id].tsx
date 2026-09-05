@@ -165,9 +165,7 @@ export default function FolderNotesScreen() {
         contentContainerStyle={{ paddingTop: Spacing.two, paddingBottom: insets.bottom + 96 }}
         renderItem={({ item, index }) =>
           item.type === 'header' ? (
-            <ThemedText type="smallBold" themeColor="textSecondary" style={styles.sectionHeader}>
-              {item.title}
-            </ThemedText>
+            <ThemedText style={styles.sectionHeader}>{item.title}</ThemedText>
           ) : (
             <NoteRow
               note={item.note}
@@ -239,11 +237,13 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   searchWrap: { paddingTop: Spacing.two, paddingBottom: Spacing.one },
   sectionHeader: {
-    paddingHorizontal: Spacing.four,
-    paddingTop: Spacing.three,
-    paddingBottom: Spacing.one,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '700',
+    paddingLeft: Spacing.three + Spacing.two,
+    paddingRight: Spacing.four,
+    paddingTop: Spacing.four,
+    paddingBottom: Spacing.two,
   },
   empty: { alignItems: 'center', justifyContent: 'center', paddingTop: Spacing.six, gap: Spacing.two },
   emptyText: { textAlign: 'center', paddingHorizontal: Spacing.six },

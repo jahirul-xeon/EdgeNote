@@ -63,8 +63,9 @@ export function relativeTime(timestamp: number, now: number = Date.now()): strin
 }
 
 /**
- * Section label for grouping notes by day: "Today", "Yesterday", then the full
- * date ("September 6, 2026").
+ * Apple Notes–style section label for grouping notes: Today, Yesterday,
+ * Previous 7 Days, Previous 30 Days, then the month (and year for older notes).
+ * The exact date/time of each note is still shown on its row.
  */
 export function dateGroupLabel(timestamp: number, now: number = Date.now()): string {
   const startOf = (t: number) => {
@@ -72,13 +73,12 @@ export function dateGroupLabel(timestamp: number, now: number = Date.now()): str
     d.setHours(0, 0, 0, 0);
     return d.getTime();
   };
-  const today = startOf(now);
-  const day = startOf(timestamp);
-  if (day === today) return 'Today';
-  if (day === today - DAY) return 'Yesterday';
-  return new Date(timestamp).toLocaleDateString(undefined, {
-    month: 'long',
-    day: 'numeric',
-    year: 'numeric',
-  });
+  const diffDays = Math.round((startOf(now) - startOf(timestamp)) / DAY);
+  if (diffDays <= 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays <= 7) return 'Previous 7 Days';
+  if (diffDays <= 30) return 'Previous 30 Days';
+  const date = new Date(timestamp);
+  const sameYear = date.getFullYear() === new Date(now).getFullYear();
+  return date.toLocaleDateString(undefined, sameYear ? { month: 'long' } : { month: 'long', year: 'numeric' });
 }
