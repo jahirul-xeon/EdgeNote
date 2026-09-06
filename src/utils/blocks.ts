@@ -11,16 +11,28 @@ export function createBlock(type: ContentBlock['type'], attachmentId?: string): 
       return { id, type, attachmentId: attachmentId ?? '' };
     case 'file':
       return { id, type, attachmentId: attachmentId ?? '' };
+    case 'link':
+      return { id, type, url: '' };
     default:
       return { id, type, text: '' };
   }
 }
 
+/** A link-preview block for a pasted URL. Metadata is filled in after fetch. */
+export function createLinkBlock(url: string): Extract<ContentBlock, { type: 'link' }> {
+  return { id: createId('blk'), type: 'link', url };
+}
+
 /** Flattens blocks to the plain text stored in `notes.content` (search/preview). */
 export function blocksToPlainText(blocks: ContentBlock[]): string {
   return blocks
-    .filter(isTextBlock)
-    .map((block) => block.text)
+    .map((block) => {
+      if (isTextBlock(block)) return block.text;
+      // Links contribute their title/url so they're searchable and previewable.
+      if (block.type === 'link') return block.title ? `${block.title} ${block.url}` : block.url;
+      return null;
+    })
+    .filter((line): line is string => line !== null)
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();

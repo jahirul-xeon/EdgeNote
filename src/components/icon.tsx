@@ -21,6 +21,7 @@ import {
   Heading1,
   Import,
   Image as ImageIcon,
+  Link2,
   List,
   Lock,
   LockOpen,
@@ -32,6 +33,7 @@ import {
   Paperclip,
   Pin,
   Plus,
+  Redo2,
   RefreshCw,
   Search,
   Settings,
@@ -39,6 +41,7 @@ import {
   Square,
   SquarePen,
   Trash2,
+  Undo2,
   User,
   WifiOff,
   X,
@@ -86,6 +89,9 @@ const ICONS = {
   mic: Mic,
   play: Play,
   pause: Pause,
+  undo: Undo2,
+  redo: Redo2,
+  link: Link2,
 } satisfies Record<string, LucideIcon>;
 
 export type IconName = keyof typeof ICONS;

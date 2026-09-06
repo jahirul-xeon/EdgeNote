@@ -11,7 +11,16 @@ export type ContentBlock =
   | { id: string; type: 'bullet'; text: string }
   | { id: string; type: 'checklist'; text: string; checked: boolean }
   | { id: string; type: 'image'; attachmentId: string }
-  | { id: string; type: 'file'; attachmentId: string };
+  | { id: string; type: 'file'; attachmentId: string }
+  | {
+      id: string;
+      type: 'link';
+      url: string;
+      title?: string;
+      description?: string;
+      image?: string;
+      siteName?: string;
+    };
 
 export type BlockType = ContentBlock['type'];
 

@@ -12,6 +12,7 @@ import {
   useNavigation,
   useRouter,
 } from 'expo-router';
+import { openBrowserAsync, WebBrowserPresentationStyle } from 'expo-web-browser';
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -22,6 +23,7 @@ import {
   View,
   type NativeSyntheticEvent,
   type TextInputKeyPressEventData,
+  type TextInputSelectionChangeEventData,
 } from 'react-native';
 import {
   KeyboardAwareScrollView,
@@ -33,6 +35,7 @@ import { ActionSheet, type SheetAction } from '@/components/action-sheet';
 import { GlassSurface } from '@/components/glass/glass-surface';
 import { Icon } from '@/components/icon';
 import { AudioPlayer } from '@/components/audio-player';
+import { LinkPreviewCard } from '@/components/notes/link-preview';
 import { ImageViewerModal } from '@/components/media-viewer';
 import { Skeleton } from '@/components/skeleton';
 import { ThemedText } from '@/components/themed-text';
@@ -65,11 +68,15 @@ import type { Attachment } from '@/types/attachment';
 import type { BlockType, ContentBlock } from '@/types/blocks';
 import { isTextBlock } from '@/types/blocks';
 import { resolvePublicUrl } from '@/services/edgeflare/storage';
-import { blocksToPlainText, createBlock, parseBlocks } from '@/utils/blocks';
+import { fetchLinkMetadata, isUrl, splitTrailingUrl } from '@/services/links/linkPreview';
+import { blocksToPlainText, createBlock, createLinkBlock, parseBlocks } from '@/utils/blocks';
 import { deriveTitle } from '@/utils/format';
 import { hapticLight, hapticSelection, hapticSuccess, hapticWarning } from '@/utils/haptics';
 
 const AUTOSAVE_DELAY = 400;
+// Edits within this window fold into one undo step (so typing a word is one undo).
+const HISTORY_COALESCE_DELAY = 500;
+const HISTORY_LIMIT = 100;
 
 /** Short type label for a file chip, e.g. "pdf". */
 function extensionLabel(name?: string | null, mimeType?: string | null): string | null {
@@ -77,6 +84,26 @@ function extensionLabel(name?: string | null, mimeType?: string | null): string 
   if (fromName && fromName.length <= 5 && /^[a-z0-9]+$/.test(fromName)) return fromName;
   const fromMime = mimeType?.split('/').pop()?.toLowerCase();
   if (fromMime && fromMime.length <= 5 && /^[a-z0-9]+$/.test(fromMime)) return fromMime;
+  return null;
+}
+
+type TextBlock = Extract<ContentBlock, { text: string }>;
+
+/**
+ * Picks the text block to place the caret in after an undo/redo: the first one
+ * whose text differs between the two snapshots, else the last text block.
+ */
+function pickHistoryFocus(from: ContentBlock[], to: ContentBlock[]): TextBlock | null {
+  const fromMap = new Map(from.map((b) => [b.id, b]));
+  for (const b of to) {
+    if (!isTextBlock(b)) continue;
+    const prev = fromMap.get(b.id);
+    if (!prev || !isTextBlock(prev) || prev.text !== b.text) return b;
+  }
+  for (let i = to.length - 1; i >= 0; i -= 1) {
+    const b = to[i];
+    if (isTextBlock(b)) return b;
+  }
   return null;
 }
 
@@ -112,6 +139,7 @@ export default function NoteEditorScreen() {
   const [viewerUri, setViewerUri] = useState<string | null>(null);
   const [downloadingIds, setDownloadingIds] = useState<Set<string>>(new Set());
   const [mediaMenu, setMediaMenu] = useState<ContentBlock | null>(null);
+  const [linkMenu, setLinkMenu] = useState<ContentBlock | null>(null);
   const [noteMenu, setNoteMenu] = useState(false);
   const [exportMenu, setExportMenu] = useState(false);
   const [unlocked, setUnlocked] = useState(false);
@@ -124,12 +152,25 @@ export default function NoteEditorScreen() {
   const blocksRef = useRef<ContentBlock[]>([]);
   const inputs = useRef<Record<string, TextInput | null>>({});
   const focusedId = useRef<string | null>(null);
+  // Caret position within the focused input, so backspace can tell whether the
+  // cursor sits at the very start of a line.
+  const selectionRef = useRef<{ start: number; end: number }>({ start: 0, end: 0 });
+  // Link blocks we've already tried to fetch metadata for (one attempt each).
+  const linkFetched = useRef<Set<string>>(new Set());
   const pendingFocus = useRef<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pinnedRef = useRef(false);
   // True only after a real edit. Prevents merely opening a note from bumping
   // its updatedAt (and triggering a needless sync push).
   const dirtyRef = useRef(false);
+
+  // Undo/redo history. Rapid edits (e.g. typing) coalesce into a single step
+  // via a short debounce so undo doesn't rewind one keystroke at a time.
+  const history = useRef<ContentBlock[][]>([]);
+  const historyIndex = useRef(0);
+  const historyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [canUndo, setCanUndo] = useState(false);
+  const [canRedo, setCanRedo] = useState(false);
 
   blocksRef.current = blocks;
 
@@ -140,6 +181,8 @@ export default function NoteEditorScreen() {
       initialized.current = true;
       const initial = parseBlocks(note.blocksJson, note.content);
       setBlocks(initial);
+      history.current = [initial];
+      historyIndex.current = 0;
       pinnedRef.current = note.isPinned;
       if (note.content.length === 0 && initial.length === 1) {
         pendingFocus.current = initial[0].id;
@@ -199,7 +242,9 @@ export default function NoteEditorScreen() {
     if (lockedRef.current) return;
     const current = blocksRef.current;
     const content = blocksToPlainText(current);
-    const hasMedia = current.some((b) => b.type === 'image' || b.type === 'file');
+    const hasMedia = current.some(
+      (b) => b.type === 'image' || b.type === 'file' || b.type === 'link',
+    );
     if (content.trim().length === 0 && !hasMedia) {
       await permanentlyDeleteNote(id);
       return;
@@ -218,23 +263,160 @@ export default function NoteEditorScreen() {
     }, AUTOSAVE_DELAY);
   }, [persist]);
 
+  // Snapshot the latest blocks as a new undo step, dropping any redo tail.
+  const commitHistory = useCallback(() => {
+    historyTimer.current = null;
+    const snap = blocksRef.current;
+    if (history.current[historyIndex.current] === snap) return;
+    const kept = history.current.slice(0, historyIndex.current + 1);
+    kept.push(snap);
+    if (kept.length > HISTORY_LIMIT) kept.shift();
+    history.current = kept;
+    historyIndex.current = kept.length - 1;
+    setCanUndo(historyIndex.current > 0);
+    setCanRedo(false);
+  }, []);
+
+  const scheduleHistory = useCallback(() => {
+    if (historyTimer.current) clearTimeout(historyTimer.current);
+    historyTimer.current = setTimeout(commitHistory, HISTORY_COALESCE_DELAY);
+  }, [commitHistory]);
+
   const mutate = useCallback(
     (next: ContentBlock[]) => {
       dirtyRef.current = true;
       setBlocks(next);
       blocksRef.current = next;
       scheduleSave();
+      scheduleHistory();
     },
-    [scheduleSave],
+    [scheduleSave, scheduleHistory],
   );
+
+  // Move through the undo/redo stack. Flushes any pending edit first so the
+  // in-progress change becomes its own step before we step back from it.
+  const applyHistory = useCallback(
+    (direction: -1 | 1) => {
+      if (historyTimer.current) {
+        clearTimeout(historyTimer.current);
+        commitHistory();
+      }
+      const target = historyIndex.current + direction;
+      if (target < 0 || target >= history.current.length) return;
+      const from = blocksRef.current;
+      historyIndex.current = target;
+      const snap = history.current[target];
+      dirtyRef.current = true;
+      setBlocks(snap);
+      blocksRef.current = snap;
+      scheduleSave();
+      setCanUndo(target > 0);
+      setCanRedo(target < history.current.length - 1);
+      hapticSelection();
+      // Move the caret to the block this step changed so typing continues there.
+      const focusBlock = pickHistoryFocus(from, snap);
+      if (focusBlock) {
+        focusedId.current = focusBlock.id;
+        const end = focusBlock.text.length;
+        requestAnimationFrame(() => {
+          const input = inputs.current[focusBlock.id];
+          input?.focus();
+          input?.setSelection?.(end, end);
+        });
+      }
+    },
+    [commitHistory, scheduleSave],
+  );
+
+  const undo = useCallback(() => applyHistory(-1), [applyHistory]);
+  const redo = useCallback(() => applyHistory(1), [applyHistory]);
 
   // --- Block operations ----------------------------------------------------
 
   const setText = (blockId: string, text: string) => {
+    const prev = blocksRef.current.find((b) => b.id === blockId);
+    const prevLen = prev && isTextBlock(prev) ? prev.text.length : 0;
     mutate(
       blocksRef.current.map((b) => (b.id === blockId && isTextBlock(b) ? { ...b, text } : b)),
     );
+    // Paste detection: a URL that arrives in a single big insertion (not typed
+    // one key at a time) becomes a link-preview block.
+    if (text.length - prevLen > 1) {
+      const trimmed = text.trim();
+      const split = splitTrailingUrl(trimmed);
+      if (isUrl(trimmed)) {
+        insertLinkForPaste(blockId, '', trimmed);
+      } else if (split) {
+        insertLinkForPaste(blockId, split.lead, split.url);
+      }
+    }
   };
+
+  // Fetches preview metadata for a link block once and stores it on the block.
+  // Uses a light write (no undo step) so the async fill doesn't clutter history.
+  const fillLinkMeta = useCallback(
+    (blockId: string, url: string) => {
+      if (linkFetched.current.has(blockId)) return;
+      linkFetched.current.add(blockId);
+      void fetchLinkMetadata(url).then((meta) => {
+        if (!meta || (!meta.title && !meta.description && !meta.image)) return;
+        const next = blocksRef.current.map((b) =>
+          b.id === blockId && b.type === 'link' ? { ...b, ...meta } : b,
+        );
+        dirtyRef.current = true;
+        blocksRef.current = next;
+        setBlocks(next);
+        scheduleSave();
+      });
+    },
+    [scheduleSave],
+  );
+
+  /**
+   * Replaces/splits the paragraph that received a pasted URL: any leading text
+   * stays in the paragraph, a link block follows, and a trailing text block is
+   * ensured so the caret has somewhere to land below the preview.
+   */
+  const insertLinkForPaste = (blockId: string, lead: string, url: string) => {
+    const current = blocksRef.current;
+    const idx = current.findIndex((b) => b.id === blockId);
+    if (idx < 0) return;
+    const link = createLinkBlock(url);
+    let next: ContentBlock[];
+    let linkIndex: number;
+    if (lead.length === 0) {
+      next = [...current.slice(0, idx), link, ...current.slice(idx + 1)];
+      linkIndex = idx;
+    } else {
+      const para = current[idx];
+      const updated = isTextBlock(para) ? { ...para, text: lead } : para;
+      next = [...current.slice(0, idx), updated, link, ...current.slice(idx + 1)];
+      linkIndex = idx + 1;
+    }
+    const following = next[linkIndex + 1];
+    let focusId: string;
+    if (following && isTextBlock(following)) {
+      focusId = following.id;
+    } else {
+      const trailing = createBlock('paragraph');
+      next = [...next.slice(0, linkIndex + 1), trailing, ...next.slice(linkIndex + 1)];
+      focusId = trailing.id;
+    }
+    mutate(next);
+    pendingFocus.current = focusId;
+    requestAnimationFrame(() => inputs.current[focusId]?.focus());
+    fillLinkMeta(link.id, url);
+  };
+
+  // Backfill previews for link blocks without metadata (notes opened later or
+  // imported links). fillLinkMeta only fetches once per block.
+  useEffect(() => {
+    for (const b of blocks) {
+      if (b.type === 'link' && !b.title && !b.description && !b.image) {
+        fillLinkMeta(b.id, b.url);
+      }
+    }
+  }, [blocks, fillLinkMeta]);
 
   const toggleCheck = (blockId: string) => {
     hapticSelection();
@@ -321,13 +503,38 @@ export default function NoteEditorScreen() {
     const current = blocksRef.current;
     const index = current.findIndex((b) => b.id === blockId);
     const block = current[index];
-    if (!block || !isTextBlock(block) || block.text.length > 0) return;
+    if (!block || !isTextBlock(block)) return;
+    // Only act when the caret is at the very start of the line (nothing to the
+    // left to delete), so we don't hijack normal character deletion.
+    const sel = selectionRef.current;
+    if (sel.start !== 0 || sel.end !== 0) return;
     if (current.length === 1) return; // keep at least one block
     const prev = current[index - 1];
-    const next = current.filter((b) => b.id !== blockId);
-    mutate(next);
-    if (prev && isTextBlock(prev)) {
-      requestAnimationFrame(() => inputs.current[prev.id]?.focus());
+    if (!prev) return;
+    // Caret at line start, a media/link block directly above → remove it; the
+    // caret stays on the current line.
+    if (prev.type === 'image' || prev.type === 'file' || prev.type === 'link') {
+      if (prev.type === 'image' || prev.type === 'file') {
+        const attachment = attachments[prev.attachmentId];
+        if (attachment) {
+          deleteLocalFile(attachment.localUri);
+          void deleteAttachment(attachment.id);
+        }
+      }
+      mutate(current.filter((b) => b.id !== prev.id));
+      requestAnimationFrame(() => inputs.current[blockId]?.focus());
+      return;
+    }
+    // Two text lines: collapse only when the current line is empty (keeps the
+    // old behavior; avoids surprising text merges mid-line).
+    if (isTextBlock(prev) && block.text.length === 0) {
+      const caret = prev.text.length;
+      mutate(current.filter((b) => b.id !== blockId));
+      requestAnimationFrame(() => {
+        const input = inputs.current[prev.id];
+        input?.focus();
+        input?.setSelection?.(caret, caret);
+      });
     }
   };
 
@@ -339,6 +546,35 @@ export default function NoteEditorScreen() {
       deleteLocalFile(attachment.localUri);
       void deleteAttachment(attachment.id);
     }
+  };
+
+  // --- Links ---------------------------------------------------------------
+
+  const showLinkActions = (block: ContentBlock) => {
+    if (block.type !== 'link') return;
+    hapticSelection();
+    setLinkMenu(block);
+  };
+
+  const linkMenuActions = (): SheetAction[] => {
+    if (!linkMenu || linkMenu.type !== 'link') return [];
+    const block = linkMenu;
+    return [
+      {
+        label: 'Open Link',
+        icon: 'link',
+        onPress: () =>
+          void openBrowserAsync(block.url, {
+            presentationStyle: WebBrowserPresentationStyle.AUTOMATIC,
+          }).catch(() => {}),
+      },
+      {
+        label: 'Remove',
+        icon: 'trash',
+        destructive: true,
+        onPress: () => mutate(blocksRef.current.filter((b) => b.id !== block.id)),
+      },
+    ];
   };
 
   // --- Attachments ---------------------------------------------------------
@@ -492,6 +728,10 @@ export default function NoteEditorScreen() {
           clearTimeout(saveTimer.current);
           saveTimer.current = null;
         }
+        if (historyTimer.current) {
+          clearTimeout(historyTimer.current);
+          historyTimer.current = null;
+        }
         void persist();
       };
     }, [persist]),
@@ -576,14 +816,37 @@ export default function NoteEditorScreen() {
   useLayoutEffect(() => {
     navigation.setOptions({
       headerRight: () => (
-        <Pressable onPress={handleActions} accessibilityLabel="Note actions" hitSlop={12}>
-          <Icon name="more" size={24} color={theme.accent} />
-        </Pressable>
+        <View style={styles.headerActions}>
+          <Pressable
+            onPress={undo}
+            disabled={!canUndo}
+            accessibilityLabel="Undo"
+            accessibilityState={{ disabled: !canUndo }}
+            hitSlop={10}>
+            <Icon name="undo" size={22} color={canUndo ? theme.accent : theme.textSecondary} />
+          </Pressable>
+          <Pressable
+            onPress={redo}
+            disabled={!canRedo}
+            accessibilityLabel="Redo"
+            accessibilityState={{ disabled: !canRedo }}
+            hitSlop={10}>
+            <Icon name="redo" size={22} color={canRedo ? theme.accent : theme.textSecondary} />
+          </Pressable>
+          <Pressable onPress={handleActions} accessibilityLabel="Note actions" hitSlop={10}>
+            <Icon name="more" size={24} color={theme.accent} />
+          </Pressable>
+        </View>
       ),
     });
-  }, [navigation, handleActions, theme.accent]);
+  }, [navigation, handleActions, theme.accent, theme.textSecondary, canUndo, canRedo, undo, redo]);
 
-  if (loading) {
+  // Keep the spinner up until blocks are seeded so the scroll view mounts with
+  // its final content. Mounting empty and growing a frame later throws off
+  // KeyboardAwareScrollView's first measurement (bottom line stays under the
+  // keyboard until you re-enter the note).
+  const willShowEditor = !!note && (!note.isLocked || unlocked);
+  if (loading || (willShowEditor && !initialized.current)) {
     return (
       <ThemedView style={styles.center}>
         <ActivityIndicator color={theme.textSecondary} />
@@ -642,12 +905,22 @@ export default function NoteEditorScreen() {
             }}
             onFocus={() => {
               focusedId.current = block.id;
+              // Default the caret to the start on focus; onSelectionChange
+              // corrects it. Without this, focus moved programmatically (e.g.
+              // after pasting a link) keeps the previous line's caret position,
+              // so backspace wouldn't recognize "caret at line start".
+              selectionRef.current = { start: 0, end: 0 };
+            }}
+            onSelectionChange={(e) => {
+              selectionRef.current = e.nativeEvent.selection;
             }}
             onChangeText={(text) => setText(block.id, text)}
             onSubmit={() => handleReturn(block.id)}
             onKeyPress={(e) => handleBackspace(block.id, e)}
             onToggle={() => toggleCheck(block.id)}
-            onLongPressMedia={() => showMediaActions(block)}
+            onLongPressMedia={() =>
+              block.type === 'link' ? showLinkActions(block) : showMediaActions(block)
+            }
             onOpenMedia={() => openMedia(block)}
           />
         ))}
@@ -705,6 +978,13 @@ export default function NoteEditorScreen() {
       />
 
       <ActionSheet
+        visible={linkMenu !== null}
+        title={linkMenu && linkMenu.type === 'link' ? (linkMenu.title ?? linkMenu.url) : undefined}
+        actions={linkMenuActions()}
+        onClose={() => setLinkMenu(null)}
+      />
+
+      <ActionSheet
         visible={noteMenu}
         actions={noteMenuActions()}
         onClose={() => setNoteMenu(false)}
@@ -753,6 +1033,7 @@ function BlockView({
   theme,
   registerRef,
   onFocus,
+  onSelectionChange,
   onChangeText,
   onSubmit,
   onKeyPress,
@@ -766,6 +1047,7 @@ function BlockView({
   theme: ThemeColors;
   registerRef: (ref: TextInput | null) => void;
   onFocus: () => void;
+  onSelectionChange: (e: NativeSyntheticEvent<TextInputSelectionChangeEventData>) => void;
   onChangeText: (text: string) => void;
   onSubmit: () => void;
   onKeyPress: (e: NativeSyntheticEvent<TextInputKeyPressEventData>) => void;
@@ -864,6 +1146,10 @@ function BlockView({
     );
   }
 
+  if (block.type === 'link') {
+    return <LinkPreviewCard block={block} theme={theme} onLongPress={onLongPressMedia} />;
+  }
+
   const isChecklist = block.type === 'checklist';
   const isBullet = block.type === 'bullet';
   const isHeading = block.type === 'heading';
@@ -887,6 +1173,7 @@ function BlockView({
         value={block.text}
         onChangeText={onChangeText}
         onFocus={onFocus}
+        onSelectionChange={onSelectionChange}
         onKeyPress={onKeyPress}
         onSubmitEditing={multiline ? undefined : onSubmit}
         blurOnSubmit={false}
@@ -908,6 +1195,7 @@ function BlockView({
 const styles = StyleSheet.create({
   container: { flex: 1 },
   flex: { flex: 1 },
+  headerActions: { flexDirection: 'row', alignItems: 'center', gap: Spacing.four },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   lockedWrap: { alignItems: 'center', gap: Spacing.two, padding: Spacing.six },
   lockedHint: { textAlign: 'center' },

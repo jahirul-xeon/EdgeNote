@@ -125,6 +125,8 @@ function blocksToMarkdown(blocks: ContentBlock[], byId: Record<string, Attachmen
         const a = byId[block.attachmentId];
         return `[${a?.name ?? 'file'}](${(a && resolvePublicUrl(a.remoteUrl)) ?? a?.name ?? ''})`;
       }
+      case 'link':
+        return `[${block.title ?? block.url}](${block.url})`;
       default:
         return block.text;
     }
