@@ -1,19 +1,19 @@
 import Constants from 'expo-constants';
 import { useRouter } from 'expo-router';
-import { Alert, Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { Alert, Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 
 import { Icon, type IconName } from '@/components/icon';
 import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { Spacing } from '@/constants/theme';
 import { resetDatabase } from '@/database/database';
-import { resetSyncCursor } from '@/services/sync/syncEngine';
 import { useSyncStatus } from '@/hooks/use-sync-status';
 import { useTheme } from '@/hooks/use-theme';
+import { resetSyncCursor } from '@/services/sync/syncEngine';
 import { useAppearance, type AppearancePreference } from '@/store/appearance';
 import { useAuth } from '@/store/auth';
-import { hapticSelection } from '@/utils/haptics';
 import { relativeTime } from '@/utils/format';
+import { hapticSelection } from '@/utils/haptics';
 
 const PHASE_LABEL: Record<string, string> = {
   idle: 'Up to date',
@@ -204,6 +204,46 @@ export default function SettingsScreen() {
         <Group>
           <Row label="Version" value={version} />
         </Group>
+        <View
+          style={{
+            flexDirection: 'row',
+            justifyContent: 'center',
+            alignItems: 'center',
+            margin: Spacing.four,
+          }}
+        >
+          <Text
+            style={{
+              color: theme.textSecondary,
+              fontSize: 12,
+              textAlign: 'center',
+            }}
+          >
+            © {new Date().getFullYear()}{' '}
+          </Text>
+
+          <Pressable onPress={() => Linking.openURL('https://docs.edgeflare.io/')} accessibilityRole="link">
+            <Text
+              style={{
+                color: theme.textSecondary,
+                fontSize: 12,
+                textDecorationLine: 'underline',
+              }}
+            >
+              EdgeFlare
+            </Text>
+          </Pressable>
+
+          <Text
+            style={{
+              color: theme.textSecondary,
+              fontSize: 12,
+              textAlign: 'center',
+            }}
+          >
+            {' '}❤️. All rights reserved.
+          </Text>
+        </View>
       </ScrollView>
     </ThemedView>
   );
